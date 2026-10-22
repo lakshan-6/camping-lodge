@@ -1,0 +1,25 @@
+import { useEffect, useState } from 'react';
+import { api } from '../api.js';
+
+export default function Settings({ onSaved }) {
+  const [f, setF] = useState(null);
+  const [msg, setMsg] = useState('');
+  useEffect(() => { api('/settings').then(setF).catch(e => setMsg(e.message)); }, []);
+  if (!f) return <p>{msg || 'Loading…'}</p>;
+  const set = k => e => setF({ ...f, [k]: e.target.value });
+  async function save(e) {
+    e.preventDefault(); setMsg('');
+    try { const s = await api('/settings', { method: 'PUT', body: f }); setF(s); onSaved(s); setMsg('Saved.'); } catch (x) { setMsg(x.message); }
+  }
+  return (
+    <form className="card settings" onSubmit={save}>
+      <label>Business name<input required value={f.businessName} onChange={set('businessName')} /></label>
+      <label>Phone / WhatsApp<input value={f.phone} onChange={set('phone')} /></label>
+      <label>Address (shown on invoices)<input value={f.address} onChange={set('address')} /></label>
+      <label>Late fee: % of the rental rate charged for each extra 36-hour period<input type="number" min="0" value={f.lateFeePercent} onChange={set('lateFeePercent')} /></label>
+      <p>Rental period length is fixed at 36 hours. Currency is LKR.</p>
+      {msg && <p className={msg === 'Saved.' ? 'ok' : 'bad'}>{msg}</p>}
+      <div><button className="btn">Save settings</button></div>
+    </form>
+  );
+}
