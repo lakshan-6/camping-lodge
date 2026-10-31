@@ -86,3 +86,22 @@ label{font-weight:500}
 .chip.active{background:#e3efe8;color:var(--ok)}.chip.completed{background:#e6e9e7;color:var(--mute)}.chip.more{background:none;color:var(--mute)}
 .settings{max-width:520px;display:grid;gap:14px}.settings p{margin:0;color:var(--mute);font-size:.85rem}
 @media(max-width:800px){.cal-d{min-height:56px;padding:4px}.chip{display:none}.cal-d.sel{background:#f1f6f3}}
+
+/* ---- Online badge, status dot, new-order customer box ---- */
+.online{float:right;display:inline-flex;align-items:center;gap:4px;background:#2d7a4f;color:#fff;border-radius:99px;padding:1px 8px;font-size:.75rem;font-weight:700}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#b7c2bc;margin-right:7px}.dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(45,122,79,.2)}
+.custbox{display:grid;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px}
+
+/* ---- Revenue card, hints ---- */
+.revcard{grid-column:span 2}.seg{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.seg button{padding:5px 12px;font-size:.8rem;text-transform:none;letter-spacing:0}.seg .on{background:var(--pine);color:#fff;border-color:var(--pine)}
+.revcard input{max-width:200px;margin-bottom:4px}.hint{margin:0;color:var(--mute);font-size:.85rem}
+@media(max-width:600px){.revcard{grid-column:auto}}
+
+/* ---- Logo ---- */
+.brand{align-items:center;text-align:center}.brand::before{display:none}.logo{width:112px;height:auto;margin-bottom:10px}
+.login-logo{width:130px;height:auto;margin:0 auto}
+.inv-brand{display:flex;align-items:center;gap:14px}.inv-logo{height:84px;width:auto}
+
+/* ---- Tick boxes ---- */
+label.check{display:flex;gap:8px;align-items:center;font-size:.95rem;color:var(--ink);font-weight:500}.check input{width:auto}

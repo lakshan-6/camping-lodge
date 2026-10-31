@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { Order, OrderItem, Invoice, Payment } from '../models/index.js';
+import { createInvoice, emailInvoice, invoicePdfBuffer } from '../utils/invoiceMail.js';
 import { httpErr } from '../utils/availability.js';
 
 const r = Router();
@@ -23,12 +24,15 @@ r.post('/', wrap(async (req, res) => {
   const o = await Order.findById(req.body.order);
   if (!o) throw httpErr(404, 'Order not found');
   if (await Invoice.findOne({ order: o._id, status: { $ne: 'void' } })) throw httpErr(409, 'This order already has an invoice');
-  const items = await OrderItem.find({ order: o._id });
-  const subtotal = items.reduce((s, i) => s + i.lineTotal, 0);
-  const n = (await Invoice.countDocuments()) + 1;
-  res.status(201).json(await Invoice.create({ invoiceNo: 'INV-' + String(n).padStart(4, '0'), order: o._id, customer: o.customer,
-    subtotal, fees: o.totalAmount - subtotal, total: o.totalAmount, status: 'issued', issuedAt: new Date() }));
+  res.status(201).json(await createInvoice(o));
 }));
+
+r.get('/:id/pdf', wrap(async (req, res) => {
+  const { buffer, invoiceNo } = await invoicePdfBuffer(req.params.id);
+  res.type('application/pdf').set('Content-Disposition', `inline; filename="${invoiceNo}.pdf"`).send(buffer);
+}));
+
+r.post('/:id/email', wrap(async (req, res) => { await emailInvoice(req.params.id); res.json({ ok: true }); }));
 
 r.patch('/:id/void', wrap(async (req, res) => {
   const inv = await Invoice.findByIdAndUpdate(req.params.id, { status: 'void' }, { new: true });

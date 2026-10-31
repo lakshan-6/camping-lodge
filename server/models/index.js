@@ -20,6 +20,8 @@ export const Customer = model('Customer', new Schema({
   name: { type: String, required: true, trim: true },
   phone: { type: String, required: true, trim: true },
   nic: String, address: String, notes: String,
+  email: { type: String, trim: true, lowercase: true },
+  detailsPending: { type: Boolean, default: false },  // WhatsApp pre-booking: full details still to collect
 }, opts));
 
 export const Order = model('Order', new Schema({
@@ -31,6 +33,7 @@ export const Order = model('Order', new Schema({
   totalAmount: { type: Number, default: 0 },
   depositAmount: { type: Number, default: 0 },
   periods: Number,
+  sendVia: { type: String, enum: ['email', 'whatsapp', 'both', 'none'], default: 'email' },  // how the customer gets their invoices
   notes: String,
 }, opts));
 
@@ -98,7 +101,8 @@ export const User = model('User', new Schema({
   username: { type: String, required: true, unique: true, lowercase: true, trim: true },
   name: { type: String, required: true, trim: true },
   passwordHash: { type: String, required: true },
-  role: { type: String, enum: ['admin', 'staff'], default: 'staff' },
+  role: { type: String, enum: ['owner', 'admin', 'staff'], default: 'staff' },
+  lastSeenAt: Date,
   active: { type: Boolean, default: true },
 }, opts));
 

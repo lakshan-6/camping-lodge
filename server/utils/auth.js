@@ -27,7 +27,9 @@ export async function requireAuth(req, res, next) {
     if (d.exp < Date.now()) throw httpErr(401, 'Session expired');
     const u = await User.findById(d.id);
     if (!u || !u.active) throw httpErr(401, 'Account disabled');
-    req.user = u; next();
+    req.user = u;
+    if (!u.lastSeenAt || Date.now() - u.lastSeenAt > 30000) User.updateOne({ _id: u._id }, { lastSeenAt: new Date() }).catch(() => {});
+    next();
   } catch (e) { next(e.status ? e : httpErr(401, 'Please log in')); }
 }
-export const requireAdmin = (req, res, next) => req.user.role === 'admin' ? next() : next(httpErr(403, 'Admin only'));
+export const requireAdmin = (req, res, next) => ['owner', 'admin'].includes(req.user.role) ? next() : next(httpErr(403, 'Admin only'));

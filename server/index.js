@@ -9,6 +9,7 @@ import orders from './routes/orders.js';
 import rentals from './routes/rentals.js';
 import returns from './routes/returns.js';
 import stats from './routes/stats.js';
+import { User } from './models/index.js';
 import auth from './routes/auth.js';
 import users from './routes/users.js';
 import reports from './routes/reports.js';
@@ -44,10 +45,18 @@ app.use((err, req, res, next) => {
   res.status(err.status || (err.name === 'ValidationError' ? 400 : 500)).json({ error: err.message });
 });
 
+// One-time upgrade: the oldest admin becomes the owner when no owner exists yet
+async function promoteOwner() {
+  if (await User.findOne({ role: 'owner' })) return;
+  const a = await User.findOne({ role: 'admin' }).sort({ createdAt: 1 });
+  if (a) { a.role = 'owner'; await a.save(); console.log('Owner account: ' + a.username); }
+}
+
 const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/camping_lodge';
 mongoose.connect(uri)
-  .then(() => {
+  .then(async () => {
     console.log('MongoDB connected');
+    await promoteOwner();
     app.listen(process.env.PORT || 5000, () => console.log('API on port ' + (process.env.PORT || 5000)));
   })
   .catch(e => { console.error('MongoDB connection failed:', e.message); process.exit(1); });

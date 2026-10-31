@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { Order, Payment, Invoice } from '../models/index.js';
+import { settleInvoice } from '../utils/invoiceMail.js';
 import { httpErr } from '../utils/availability.js';
 
 const r = Router();
@@ -26,11 +27,8 @@ r.post('/', wrap(async (req, res) => {
   const amt = Number(amount);
   if (!(amt > 0)) throw httpErr(400, 'Amount must be greater than 0');
   const p = await Payment.create({ order: o._id, amount: amt, method, type, reference });
-  const inv = await Invoice.findOne({ order: o._id, status: 'issued' });
-  if (inv) {
-    const t = (await Payment.aggregate([{ $match: { order: o._id } }, { $group: { _id: null, t: signed } }]))[0]?.t || 0;
-    if (t >= inv.total) { inv.status = 'paid'; await inv.save(); }
-  }
-  res.status(201).json(p);
+  let extra = {};
+  if (type !== 'refund') extra = await settleInvoice(o._id).catch(e => ({ emailNote: 'Payment saved, but the invoice step failed: ' + e.message }));
+  res.status(201).json({ ...p.toObject(), ...extra });
 }));
 export default r;

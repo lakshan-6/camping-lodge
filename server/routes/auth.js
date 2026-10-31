@@ -14,7 +14,7 @@ r.post('/setup', wrap(async (req, res) => {
   if (await User.countDocuments()) throw httpErr(403, 'Setup is already done');
   const { name, username, password } = req.body;
   if (!name || !username || !password || password.length < 6) throw httpErr(400, 'Name, username and a password of at least 6 characters are required');
-  const u = await User.create({ name, username, passwordHash: hashPassword(password), role: 'admin' });
+  const u = await User.create({ name, username, passwordHash: hashPassword(password), role: 'owner' });
   res.status(201).json({ token: sign(u), user: pub(u) });
 }));
 
@@ -22,6 +22,11 @@ r.post('/login', wrap(async (req, res) => {
   const u = await User.findOne({ username: String(req.body.username || '').toLowerCase().trim() });
   if (!u || !u.active || !checkPassword(String(req.body.password || ''), u.passwordHash)) throw httpErr(401, 'Wrong username or password');
   res.json({ token: sign(u), user: pub(u) });
+}));
+
+r.post('/logout', requireAuth, wrap(async (req, res) => {
+  await User.updateOne({ _id: req.user._id }, { lastSeenAt: new Date(0) });
+  res.json({ ok: true });
 }));
 
 r.get('/me', requireAuth, (req, res) => res.json(pub(req.user)));

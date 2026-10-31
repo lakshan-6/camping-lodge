@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
 
-const blank = { name: '', phone: '', nic: '', address: '', notes: '' };
+const blank = { name: '', phone: '', nic: '', email: '', address: '', notes: '' };
 
 export default function Customers() {
   const [list, setList] = useState([]);
@@ -22,7 +22,7 @@ export default function Customers() {
   return (
     <>
       <div className="bar">
-        <input placeholder="Search name or phone" value={q} onChange={e => setQ(e.target.value)} />
+        <input placeholder="Search name, phone or NIC" value={q} onChange={e => setQ(e.target.value)} />
         <button className="btn" onClick={() => { setErr(''); setForm(blank); }}>Add customer</button>
       </div>
       {err && !form && <p className="bad">{err}</p>}
@@ -31,7 +31,7 @@ export default function Customers() {
           <thead><tr><th>Name</th><th>Phone</th><th>NIC</th><th>Address</th><th></th></tr></thead>
           <tbody>{list.map(c => (
             <tr key={c._id}>
-              <td data-l="Name"><b>{c.name}</b></td><td data-l="Phone">{c.phone}</td>
+              <td data-l="Name"><b>{c.name}</b>{c.detailsPending && <> <span className="tag fair">Details pending</span></>}</td><td data-l="Phone">{c.phone}</td>
               <td data-l="NIC">{c.nic || '-'}</td><td data-l="Address">{c.address || '-'}</td>
               <td className="acts"><button onClick={() => { setErr(''); setForm(c); }}>Edit</button></td>
             </tr>))}</tbody>
@@ -43,6 +43,7 @@ export default function Customers() {
             <label>Name<input required value={form.name} onChange={set('name')} /></label>
             <label>Phone<input required value={form.phone} onChange={set('phone')} /></label>
             <label>NIC<input value={form.nic || ''} onChange={set('nic')} /></label>
+            <label>Email (invoices are sent here)<input type="email" value={form.email || ''} onChange={set('email')} /></label>
             <label>Address<input value={form.address || ''} onChange={set('address')} /></label>
             <label>Notes<textarea rows="2" value={form.notes || ''} onChange={set('notes')} /></label>
             {err && <p className="bad">{err}</p>}

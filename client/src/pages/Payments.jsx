@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
+import WhatsAppPrompt from './WhatsAppPrompt.jsx';
 
 const fmt = d => new Date(d).toLocaleString('en-LK', { dateStyle: 'medium', timeStyle: 'short' });
 
@@ -8,6 +9,7 @@ export default function Payments() {
   const [hist, setHist] = useState([]);
   const [form, setForm] = useState(null);
   const [err, setErr] = useState('');
+  const [wa, setWa] = useState(null);
   const load = () => {
     api('/payments/balances').then(setRows).catch(e => setErr(e.message));
     api('/payments').then(setHist).catch(e => setErr(e.message));
@@ -18,7 +20,7 @@ export default function Payments() {
 
   async function save(e) {
     e.preventDefault(); setErr('');
-    try { await api('/payments', { method: 'POST', body: { ...form, order: form.order._id, amount: +form.amount } }); setForm(null); load(); }
+    try { const p = await api('/payments', { method: 'POST', body: { ...form, order: form.order._id, amount: +form.amount } }); setForm(null); load(); if (p.emailNote) alert(p.emailNote); if (p.whatsappInvoice) setWa(p.whatsappInvoice); }
     catch (x) { setErr(x.message); }
   }
   return (
@@ -39,6 +41,7 @@ export default function Payments() {
             <tr key={p._id}><td data-l="Date">{fmt(p.paidAt)}</td><td data-l="Order"><b>{p.order?.orderNo}</b></td><td data-l="Customer">{p.order?.customer?.name}</td>
               <td data-l="Type">{p.type}</td><td data-l="Method">{p.method.replace('_', ' ')}</td>
               <td data-l="Amount">{p.type === 'refund' ? '−' : ''}{lkr(p.amount)}</td></tr>))}</tbody></table></div>)}
+      {wa && <WhatsAppPrompt invoiceId={wa} onClose={() => setWa(null)} />}
       {form && (
         <div className="modal" onClick={() => setForm(null)}>
           <form onClick={e => e.stopPropagation()} onSubmit={save}>

@@ -19,6 +19,7 @@ export default function Login({ onLogin }) {
   return (
     <div className="login">
       <form onSubmit={submit}>
+        <img src="/logo.png" alt="Camping Lodge" className="login-logo" />
         <h2>{hasUsers ? 'Log in' : 'Create the owner account'}</h2>
         {!hasUsers && <p>First time setup. This account can add staff later.</p>}
         {!hasUsers && <label>Your name<input required value={f.name} onChange={set('name')} /></label>}

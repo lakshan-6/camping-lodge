@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, lkr } from '../api.js';
+import { api, getToken, lkr } from '../api.js';
+import { sendInvoiceWhatsApp } from '../whatsapp.js';
 
 const fmt = d => new Date(d).toLocaleString('en-LK', { dateStyle: 'medium', timeStyle: 'short' });
 
@@ -22,6 +23,14 @@ export default function Billing() {
     try { await api('/invoices', { method: 'POST', body: { order: o._id } }); load(); } catch (e) { setErr(e.message); }
   }
   async function show(i) { setView(await api('/invoices/' + i._id)); }
+  async function pdfIt(i) {
+    const res = await fetch(`/api/invoices/${i._id}/pdf`, { headers: { Authorization: 'Bearer ' + getToken() } });
+    if (!res.ok) return alert('Could not make the PDF');
+    window.open(URL.createObjectURL(await res.blob()), '_blank');
+  }
+  async function emailIt(i) {
+    try { await api(`/invoices/${i._id}/email`, { method: 'POST' }); alert('Invoice emailed to ' + i.customer?.email); } catch (e) { alert('Not emailed: ' + e.message); }
+  }
   async function voidIt(i) {
     if (!confirm(`Void ${i.invoiceNo}? You can create a new invoice afterwards.`)) return;
     await api(`/invoices/${i._id}/void`, { method: 'PATCH' }); setView(null); load();
@@ -40,7 +49,7 @@ export default function Billing() {
       {view && (
         <div className="modal" onClick={() => setView(null)}>
           <div className="invoice" onClick={e => e.stopPropagation()}>
-            <div className="inv-head"><div><h2>{st.businessName}</h2><p>{st.phone}</p>{st.address && <p>{st.address}</p>}</div>
+            <div className="inv-head"><div className="inv-brand"><img src="/logo.png" alt="" className="inv-logo" /><div><h2>{st.businessName}</h2><p>{st.phone}</p>{st.address && <p>{st.address}</p>}</div></div>
               <div className="inv-r"><h2>{view.invoiceNo}</h2><p>{fmt(view.issuedAt)}</p><span className={'tag ' + (view.status === 'paid' ? '' : 'fair')}>{view.status}</span></div></div>
             <p><b>Bill to:</b> {view.customer?.name} · {view.customer?.phone}<br /><b>Order:</b> {view.order?.orderNo} · {fmt(view.order?.startDate)} → {fmt(view.order?.endDate)}</p>
             <table><thead><tr><th>Item</th><th>Qty</th><th>Rate / 36h</th><th>Periods</th><th>Amount</th></tr></thead>
@@ -53,7 +62,7 @@ export default function Billing() {
             </div>
             <div className="row end noprint">
               {view.status !== 'paid' && <button onClick={() => voidIt(view)}>Void</button>}
-              <button onClick={() => setView(null)}>Close</button><button className="btn" onClick={() => window.print()}>Print</button>
+              <button onClick={() => pdfIt(view)}>Open PDF</button><button onClick={() => sendInvoiceWhatsApp(view._id)}>WhatsApp</button><button onClick={() => emailIt(view)}>Email PDF</button><button onClick={() => setView(null)}>Close</button><button className="btn" onClick={() => window.print()}>Print</button>
             </div>
           </div>
         </div>)}

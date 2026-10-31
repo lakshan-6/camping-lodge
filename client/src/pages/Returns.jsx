@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
+import WhatsAppPrompt from './WhatsAppPrompt.jsx';
 
 const fmt = d => new Date(d).toLocaleString('en-LK', { dateStyle: 'medium', timeStyle: 'short' });
 
@@ -8,23 +9,34 @@ export default function Returns() {
   const [done, setDone] = useState([]);
   const [form, setForm] = useState(null);
   const [err, setErr] = useState('');
+  const [wa, setWa] = useState(null);
   const load = () => {
     api('/rentals?status=out').then(setOut).catch(e => setErr(e.message));
     api('/returns').then(setDone).catch(e => setErr(e.message));
   };
   useEffect(load, []);
-  const open = x => { setErr(''); setForm({ rental: x, damageFee: 0, notes: '',
-    items: x.items.map(i => ({ equipment: i.equipment._id, name: i.equipment.name, qty: i.quantity, quantityReturned: i.quantity, quantityDamaged: 0, quantityLost: 0 })) }); };
-  const setItem = (n, k, v) => setForm({ ...form, items: form.items.map((it, j) => j === n ? { ...it, [k]: v } : it) });
+  const open = async x => {
+    setErr('');
+    let pv = { balance: 0, lateFee: 0, extraPeriods: 0 };
+    try { pv = await api('/returns/preview/' + x._id); } catch (e) { setErr(e.message); }
+    setForm({ rental: x, pv, damageFee: 0, notes: '', method: 'cash', pBalance: false, pLate: false, pDamage: false,
+      items: x.items.map(i => ({ equipment: i.equipment._id, name: i.equipment.name, qty: i.quantity, quantityReturned: i.quantity, quantityDamaged: 0, quantityLost: 0 })) });
+  };
+  const setItem = (n, k, v) => setForm({ ...form, items: form.items.map((it, j) => (j === n ? { ...it, [k]: v } : it)) });
 
   async function save(e) {
     e.preventDefault(); setErr('');
     try {
-      const r = await api('/returns', { method: 'POST', body: { rental: form.rental._id, items: form.items, damageFee: +form.damageFee, notes: form.notes } });
+      const r = await api('/returns', { method: 'POST', body: { rental: form.rental._id, items: form.items, damageFee: +form.damageFee, notes: form.notes,
+        method: form.method, paid: { balance: form.pBalance, late: form.pLate, damage: form.pDamage } } });
       setForm(null); load();
-      if (r.lateFee > 0) alert('Late fee added: ' + lkr(r.lateFee));
+      const msg = [r.lateFee > 0 && 'Late fee added: ' + lkr(r.lateFee), r.emailNote].filter(Boolean).join('\n');
+      if (msg) alert(msg);
+      if (r.whatsappInvoice) setWa(r.whatsappInvoice);
     } catch (x) { setErr(x.message); }
   }
+  const dmg = form ? Math.max(0, +form.damageFee || 0) : 0;
+  const anyTick = form && ((form.pv.balance > 0 && form.pBalance) || (form.pv.lateFee > 0 && form.pLate) || (dmg > 0 && form.pDamage));
   return (
     <>
       {err && !form && <p className="bad">{err}</p>}
@@ -41,11 +53,12 @@ export default function Returns() {
           <tbody>{done.map(d => (
             <tr key={d._id}><td data-l="Order"><b>{d.rental?.order?.orderNo}</b></td><td data-l="Customer">{d.rental?.customer?.name}</td>
               <td data-l="Returned">{fmt(d.returnedAt)}</td><td data-l="Late fee">{lkr(d.lateFee)}</td><td data-l="Damage fee">{lkr(d.damageFee)}</td></tr>))}</tbody></table></div>)}
+      {wa && <WhatsAppPrompt invoiceId={wa} onClose={() => setWa(null)} />}
       {form && (
         <div className="modal" onClick={() => setForm(null)}>
           <form style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()} onSubmit={save}>
             <h2>Return {form.rental.order.orderNo}</h2>
-            <p>Returned + damaged + lost must equal the rented quantity. Late fees are added automatically.</p>
+            <p className="hint">Returned + damaged + lost must equal the rented quantity.</p>
             {form.items.map((it, n) => (
               <div key={it.equipment}><b>{it.name}</b> (rented {it.qty})
                 <div className="row3">
@@ -54,6 +67,19 @@ export default function Returns() {
                   <label>Lost<input type="number" min="0" value={it.quantityLost} onChange={e => setItem(n, 'quantityLost', e.target.value)} /></label>
                 </div></div>))}
             <label>Damage / loss fee (LKR)<input type="number" min="0" value={form.damageFee} onChange={e => setForm({ ...form, damageFee: e.target.value })} /></label>
+            <div className="custbox">
+              <b>Money to collect</b>
+              <p>Unpaid rental balance: <b>{lkr(form.pv.balance)}</b></p>
+              <p>Late fee: <b>{lkr(form.pv.lateFee)}</b>{form.pv.extraPeriods > 0 && <small> ({form.pv.extraPeriods} extra 36h period{form.pv.extraPeriods > 1 ? 's' : ''})</small>}</p>
+              <p>Damage / loss fee: <b>{lkr(dmg)}</b></p>
+              <p><b>Total: {lkr(form.pv.balance + form.pv.lateFee + dmg)}</b></p>
+              {form.pv.balance > 0 && <label className="check"><input type="checkbox" checked={form.pBalance} onChange={e => setForm({ ...form, pBalance: e.target.checked })} /> Rental balance paid ({lkr(form.pv.balance)})</label>}
+              {form.pv.lateFee > 0 && <label className="check"><input type="checkbox" checked={form.pLate} onChange={e => setForm({ ...form, pLate: e.target.checked })} /> Late fee paid ({lkr(form.pv.lateFee)})</label>}
+              {dmg > 0 && <label className="check"><input type="checkbox" checked={form.pDamage} onChange={e => setForm({ ...form, pDamage: e.target.checked })} /> Damage / loss fee paid ({lkr(dmg)})</label>}
+              {anyTick && <label>Paid by<select value={form.method} onChange={e => setForm({ ...form, method: e.target.value })}>
+                <option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option><option value="other">Other</option></select></label>}
+              <p className="hint">Leave a box unticked if the customer has not paid it yet. It stays as an unpaid balance.</p>
+            </div>
             <label>Notes<textarea rows="2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></label>
             {err && <p className="bad">{err}</p>}
             <div className="row end"><button type="button" onClick={() => setForm(null)}>Cancel</button><button className="btn">Confirm return</button></div>
