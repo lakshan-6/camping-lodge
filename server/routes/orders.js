@@ -1,9 +1,15 @@
 import { Router } from 'express';
+import crypto from 'node:crypto';
+import { rateLimit } from 'express-rate-limit';
 import { Order, OrderItem, Payment, Invoice } from '../models/index.js';
 import { availability, countPeriods, httpErr } from '../utils/availability.js';
 
 const r = Router();
 const wrap = fn => (req, res, next) => fn(req, res).catch(next);
+const ownerOnly = (req, res, next) => req.user?.role === 'owner' ? next() : next(httpErr(403, 'Only the owner can delete past orders'));
+const pastDeleteLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5,
+  keyGenerator: req => String(req.user._id), standardHeaders: 'draft-8', legacyHeaders: false,
+  message: { error: 'Too many past-order deletion attempts. Try again in 15 minutes.' } });
 
 // Runs order changes one at a time so two requests can't both take the last unit
 let chain = Promise.resolve();
@@ -83,8 +89,29 @@ r.patch('/:id/cancel', wrap(async (req, res) => {
   res.json(o);
 }));
 
-// Hide abandoned bookings while retaining order references for payment/invoice history.
-// Keep the record so count-based order numbers are never reused after deletion.
+// Owner-only removal of completed orders, with a separate server-side access key.
+r.delete('/:id/past', ownerOnly, pastDeleteLimit, wrap(async (req, res) => {
+  const expected = process.env.PAST_ORDER_DELETE_KEY;
+  if (!expected || Buffer.byteLength(expected) < 32)
+    throw httpErr(503, 'Past-order deletion is not configured. Set PAST_ORDER_DELETE_KEY in the server environment.');
+  const supplied = req.body?.accessKey;
+  const digest = value => crypto.createHash('sha256').update(value).digest();
+  if (typeof supplied !== 'string' || supplied.length > 256 || !crypto.timingSafeEqual(digest(supplied.trim()), digest(expected)))
+    throw httpErr(403, 'Incorrect delete access key');
+  // Preserve the completed status and every accounting/stock record. This only
+  // removes the order from the order list and calendar; it does not undo a rental.
+  const o = await Order.findOneAndUpdate({ _id: req.params.id, deletedAt: null, status: 'completed' }, {
+    $set: { deletedAt: new Date(), deletedBy: req.user._id }
+  }, { new: true });
+  if (!o) {
+    const existing = await Order.findById(req.params.id);
+    if (!existing || existing.deletedAt) throw httpErr(404, 'Order not found');
+    throw httpErr(409, 'Only completed orders can be deleted here. Receive outstanding returns first.');
+  }
+  res.json({ ok: true });
+}));
+
+// Hide abandoned bookings while retaining accounting history and order numbers.
 r.delete('/:id', wrap(async (req, res) => {
   const o = await Order.findOneAndUpdate({ _id: req.params.id, deletedAt: null,
     status: { $in: ['reserved', 'cancelled'] } }, {

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 const path = new URL('../.env', import.meta.url);
 let text = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : fs.readFileSync(new URL('../.env.example', import.meta.url), 'utf8');
-for (const key of ['AUTH_SECRET', 'SETUP_KEY']) {
+for (const key of ['AUTH_SECRET', 'SETUP_KEY', 'PAST_ORDER_DELETE_KEY']) {
   const pattern = new RegExp('^' + key + '=(.*)$', 'm');
   const current = text.match(pattern)?.[1]?.trim();
   if (current && current.length >= 64 && !current.startsWith('replace-')) continue;

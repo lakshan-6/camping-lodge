@@ -23,3 +23,9 @@ Manual web service settings, if not using a Blueprint:
 `TRUST_PROXY_HOPS=1` is intended for the Render proxy in front of this service. Recheck the proxy topology before using another host. Run one service instance while the login limiter uses its in-memory store.
 
 Keep the Vite development server private; it is not used for production. Optional invoice email requires SMTP environment variables and a hosting plan that supports your SMTP provider's outbound port. Do not commit SMTP credentials.
+
+## Owner deletion of past orders
+
+Sync the Blueprint after updating `render.yaml` to generate `PAST_ORDER_DELETE_KEY` for an existing Render service. Find it under the service's Environment settings. Keep it private and separate from `SETUP_KEY`; the frontend never receives it automatically. For manual setup, use an independent random value of at least 32 bytes and save it only in Render's environment settings. For local use, run `npm run configure-auth` in `server`; existing strong authentication keys are preserved.
+
+The owner sees **Delete past order** on completed orders and must enter this key on every deletion. Admins and staff cannot use the endpoint even if they know the key. There are five attempts per owner per 15 minutes per server process. Active rentals must be returned first. Deletion hides the completed order from Orders/Calendar while preserving its completed status, financial totals, payments, invoices, returns and inventory records. The deletion time and owner ID are recorded. No existing orders are deleted by deploying this feature.

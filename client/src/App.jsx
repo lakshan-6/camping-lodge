@@ -48,7 +48,7 @@ export default function App() {
   if (!ready) return null;
   if (!user) return <Login onLogin={setUser} />;
   const admin = ['owner', 'admin'].includes(user.role);
-  const pages = { '/': <Dashboard />, '/inventory': <Inventory />, '/availability': <Availability />, '/orders': <Orders />,
+  const pages = { '/': <Dashboard />, '/inventory': <Inventory />, '/availability': <Availability />, '/orders': <Orders me={user} />,
     '/rentals': <Rentals />, '/returns': <Returns />, '/customers': <Customers />, '/calendar': <Calendar />,
     '/billing': <Billing />, '/payments': <Payments />, '/reports': <Reports />, '/settings': <Settings onSaved={setSt} />, '/staff': <Staff me={user} /> };
   const items = nav.filter(([to]) => admin || !adminOnly.includes(to));

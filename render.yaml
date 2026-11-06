@@ -19,3 +19,5 @@ services:
         generateValue: true
       - key: SETUP_KEY
         generateValue: true
+      - key: PAST_ORDER_DELETE_KEY
+        generateValue: true

@@ -8,7 +8,7 @@ const fmt = d => new Date(d).toLocaleString('en-LK', { dateStyle: 'medium', time
 const periodsOf = (s, e) => Math.max(1, Math.ceil((new Date(e) - new Date(s)) / (36 * 3600 * 1000)));
 const blank = { customer: '', cq: '', newCust: false, pre: false, advance: '', advMethod: 'bank_transfer', nc: { name: '', phone: '', nic: '', email: '' }, start: '', end: '', lines: [{ equipment: '', quantity: 1 }] };
 
-export default function Orders() {
+export default function Orders({ me }) {
   const [orders, setOrders] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [avail, setAvail] = useState([]);
@@ -16,6 +16,11 @@ export default function Orders() {
   const [details, setDetails] = useState(null);
   const [editing, setEditing] = useState(null);
   const [err, setErr] = useState('');
+  const [pastDelete, setPastDelete] = useState(null);
+  const [accessKey, setAccessKey] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const closePastDelete = () => { if (!deleting) { setPastDelete(null); setAccessKey(''); setDeleteError(''); } };
   const load = () => api('/orders').then(setOrders).catch(e => setErr(e.message));
   useEffect(() => { load(); api('/customers').then(setCustomers); }, []);
 
@@ -54,6 +59,16 @@ export default function Orders() {
     if (!confirm(`Delete booking ${o.orderNo}? It will be removed from Orders and the calendar, and its reserved stock will be released. Any payments already recorded will be kept; refunds must be recorded separately.`)) return;
     try { await api(`/orders/${o._id}`, { method: 'DELETE' }); load(); } catch (x) { setErr(x.message); }
   }
+  async function removePast(e) {
+    e.preventDefault();
+    if (deleting) return;
+    setDeleting(true); setDeleteError('');
+    try {
+      await api(`/orders/${pastDelete._id}/past`, { method: 'DELETE', body: { accessKey } });
+      setPastDelete(null); setAccessKey(''); load();
+    } catch (x) { setDeleteError(x.message); }
+    finally { setDeleting(false); }
+  }
 
   return (
     <>
@@ -69,11 +84,24 @@ export default function Orders() {
               <td data-l="Items">{o.items.map(i => `${i.quantity}× ${i.equipment?.name}`).join(', ')}</td>
               <td data-l="Total">{lkr(o.totalAmount)}<small>{o.periods}× 36h</small></td>
               <td data-l="Status"><span className={'tag ' + (o.status === 'cancelled' ? 'needs_repair' : '')}>{o.status}</span></td>
-              <td className="acts">{o.customer?.detailsPending && <button onClick={() => setDetails(o.customer)}>Add details</button>}{o.status === 'reserved' && <><button onClick={() => setEditing(o)}>Change items</button><button onClick={() => cancel(o)}>Cancel</button></>}{['reserved', 'cancelled'].includes(o.status) && <button onClick={() => remove(o)}>Delete</button>}</td>
+              <td className="acts">{o.customer?.detailsPending && <button onClick={() => setDetails(o.customer)}>Add details</button>}{o.status === 'reserved' && <><button onClick={() => setEditing(o)}>Change items</button><button onClick={() => cancel(o)}>Cancel</button></>}{['reserved', 'cancelled'].includes(o.status) && <button onClick={() => remove(o)}>Delete</button>}{o.status === 'completed' && me?.role === 'owner' && <button onClick={() => { setPastDelete(o); setAccessKey(''); setDeleteError(''); }}>Delete past order</button>}</td>
             </tr>))}</tbody>
         </table></div>)}
       {editing && <EditOrder order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {details && <CustomerDetails customer={details} onClose={() => setDetails(null)} onSaved={() => { setDetails(null); load(); api('/customers').then(setCustomers); }} />}
+      {pastDelete && (
+        <div className="modal" onClick={closePastDelete}>
+          <form onClick={e => e.stopPropagation()} onSubmit={removePast}>
+            <h2>Delete past order {pastDelete.orderNo}</h2>
+            <p>This completed order will be removed from Orders and Calendar. Payment, invoice and return history, financial totals and stock will stay unchanged.</p>
+            <label>Owner delete access key<input required autoFocus type="password" autoComplete="off" maxLength={256}
+              value={accessKey} onChange={e => setAccessKey(e.target.value)} disabled={deleting} /></label>
+            {deleteError && <p className="bad" role="alert">{deleteError}</p>}
+            <div className="row end"><button type="button" disabled={deleting} onClick={closePastDelete}>Cancel</button>
+              <button className="btn" disabled={deleting || !accessKey.trim()}>{deleting ? 'Deleting…' : 'Confirm delete'}</button></div>
+          </form>
+        </div>
+      )}
       {form && (
         <div className="modal" onClick={() => setForm(null)}>
           <form style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()} onSubmit={save}>
