@@ -17,9 +17,16 @@ import settings from './routes/settings.js';
 import { requireAuth, requireAdmin, validateAuthConfig } from './utils/auth.js';
 import payments from './routes/payments.js';
 import invoices from './routes/invoices.js';
+import { serveClient } from './utils/production.js';
 
 validateAuthConfig();
 const app = express();
+if (process.env.TRUST_PROXY_HOPS) {
+  const hops = Number(process.env.TRUST_PROXY_HOPS);
+  if (!Number.isInteger(hops) || hops < 1) throw new Error('TRUST_PROXY_HOPS must be a positive integer');
+  app.set('trust proxy', hops);
+}
+app.disable('x-powered-by');
 app.use(cors());
 app.use(express.json());
 
@@ -39,6 +46,8 @@ app.use('/api/invoices', invoices);
 app.use('/api/settings', settings);
 app.use('/api/users', requireAdmin, users);
 app.use('/api/reports', requireAdmin, reports);
+app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
+if (process.env.NODE_ENV === 'production') serveClient(app);
 // Next steps: /api/customers, /api/orders, /api/rentals, /api/returns, /api/payments, /api/invoices
 
 app.use((err, req, res, next) => {
@@ -53,6 +62,7 @@ async function promoteOwner() {
   if (a) { a.role = 'owner'; await a.save(); console.log('Owner account: ' + a.username); }
 }
 
+if (process.env.NODE_ENV === 'production' && !process.env.MONGODB_URI) throw new Error('MONGODB_URI is required in production');
 const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/camping_lodge';
 mongoose.connect(uri)
   .then(async () => {
