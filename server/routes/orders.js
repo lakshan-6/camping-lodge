@@ -92,11 +92,11 @@ r.patch('/:id/cancel', wrap(async (req, res) => {
 // Owner-only removal of completed orders, with a separate server-side access key.
 r.delete('/:id/past', ownerOnly, pastDeleteLimit, wrap(async (req, res) => {
   const expected = process.env.PAST_ORDER_DELETE_KEY;
-  if (!expected || Buffer.byteLength(expected) < 32)
-    throw httpErr(503, 'Past-order deletion is not configured. Set PAST_ORDER_DELETE_KEY in the server environment.');
+  if (!expected || expected.length < 12 || expected.length > 128)
+    throw httpErr(503, 'Set PAST_ORDER_DELETE_KEY to 12 to 128 characters in the server environment.');
   const supplied = req.body?.accessKey;
   const digest = value => crypto.createHash('sha256').update(value).digest();
-  if (typeof supplied !== 'string' || supplied.length > 256 || !crypto.timingSafeEqual(digest(supplied.trim()), digest(expected)))
+  if (typeof supplied !== 'string' || supplied.length > 128 || !crypto.timingSafeEqual(digest(supplied.trim()), digest(expected)))
     throw httpErr(403, 'Incorrect delete access key');
   // Preserve the completed status and every accounting/stock record. This only
   // removes the order from the order list and calendar; it does not undo a rental.

@@ -5,7 +5,10 @@ let text = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : fs.readFileSync
 for (const key of ['AUTH_SECRET', 'SETUP_KEY', 'PAST_ORDER_DELETE_KEY']) {
   const pattern = new RegExp('^' + key + '=(.*)$', 'm');
   const current = text.match(pattern)?.[1]?.trim();
-  if (current && current.length >= 64 && !current.startsWith('replace-')) continue;
+  const validLength = key === 'PAST_ORDER_DELETE_KEY'
+    ? current && current.length >= 12 && current.length <= 128
+    : current && current.length >= 64;
+  if (validLength && !current.startsWith('replace-')) continue;
   const line = key + '=' + crypto.randomBytes(32).toString('hex');
   text = pattern.test(text) ? text.replace(pattern, line) : text + '\n' + line + '\n';
 }

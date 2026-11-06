@@ -88,6 +88,24 @@ test('past-order deletion requires owner authentication and its separate access 
     assert.equal(order.deletedBy, JSON.parse(Buffer.from(token.split('.')[0], 'base64url')).id);
     assert.equal((await remove(token)).status, 404);
   });
+  await t.test('custom 12-character keys including symbols are accepted', async () => {
+    resetOrder();
+    const customKey = 'TestKey123@@';
+    assert.equal(customKey.length, 12);
+    process.env.PAST_ORDER_DELETE_KEY = customKey;
+    assert.equal((await remove(actor(), customKey)).status, 200);
+    process.env.PAST_ORDER_DELETE_KEY = correctKey;
+  });
+  await t.test('keys shorter than 12 or longer than 128 characters fail closed', async () => {
+    resetOrder();
+    const token = actor();
+    for (const size of [11, 129]) {
+      process.env.PAST_ORDER_DELETE_KEY = 'x'.repeat(size);
+      assert.equal((await remove(token, 'x'.repeat(size))).status, 503);
+    }
+    process.env.PAST_ORDER_DELETE_KEY = correctKey;
+    assert.equal(writes, 0);
+  });
   await t.test('active/reserved/cancelled orders cannot bypass their normal workflows', async () => {
     const token = actor();
     for (const status of ['active', 'reserved', 'cancelled']) {

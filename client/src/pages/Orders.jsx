@@ -94,7 +94,7 @@ export default function Orders({ me }) {
           <form onClick={e => e.stopPropagation()} onSubmit={removePast}>
             <h2>Delete past order {pastDelete.orderNo}</h2>
             <p>This completed order will be removed from Orders and Calendar. Payment, invoice and return history, financial totals and stock will stay unchanged.</p>
-            <label>Owner delete access key<input required autoFocus type="password" autoComplete="off" maxLength={256}
+            <label>Owner delete access key (12–128 characters)<input required autoFocus type="password" autoComplete="off" minLength={12} maxLength={128}
               value={accessKey} onChange={e => setAccessKey(e.target.value)} disabled={deleting} /></label>
             {deleteError && <p className="bad" role="alert">{deleteError}</p>}
             <div className="row end"><button type="button" disabled={deleting} onClick={closePastDelete}>Cancel</button>
