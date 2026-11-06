@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { Order, Payment, Invoice } from '../models/index.js';
 import { settleInvoice } from '../utils/invoiceMail.js';
 import { httpErr } from '../utils/availability.js';
+import { withOrderLock } from '../utils/orderDeletion.js';
 
 const r = Router();
 const wrap = fn => (req, res, next) => fn(req, res).catch(next);
@@ -20,7 +21,7 @@ r.get('/', wrap(async (req, res) => {
     .populate({ path: 'order', select: 'orderNo customer', populate: { path: 'customer', select: 'name' } }).lean());
 }));
 
-r.post('/', wrap(async (req, res) => {
+r.post('/', wrap(async (req, res) => withOrderLock(req.body.order, async () => {
   const { order, amount, method, type, reference } = req.body;
   const o = await Order.findById(order);
   if (!o) throw httpErr(404, 'Order not found');
@@ -30,5 +31,5 @@ r.post('/', wrap(async (req, res) => {
   let extra = {};
   if (type !== 'refund') extra = await settleInvoice(o._id).catch(e => ({ emailNote: 'Payment saved, but the invoice step failed: ' + e.message }));
   res.status(201).json({ ...p.toObject(), ...extra });
-}));
+})));
 export default r;

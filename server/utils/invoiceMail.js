@@ -5,6 +5,7 @@ import { getSettings } from '../routes/settings.js';
 import { sendMail } from './mail.js';
 import { invoicePdf } from './invoicePdf.js';
 import { httpErr } from './availability.js';
+import { nextDocumentNumber } from './documentNumbers.js';
 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const lkr = n => 'LKR ' + Number(n || 0).toLocaleString('en-LK');
@@ -24,8 +25,8 @@ export async function createInvoice(o) {
   const items = await OrderItem.find({ order: o._id });
   const subtotal = items.reduce((s, i) => s + i.lineTotal, 0);
   const paid = sumPaid(await Payment.find({ order: o._id }));
-  const n = (await Invoice.countDocuments()) + 1;
-  return Invoice.create({ invoiceNo: 'INV-' + String(n).padStart(4, '0'), order: o._id, customer: o.customer,
+  const invoiceNo = await nextDocumentNumber('invoice');
+  return Invoice.create({ invoiceNo, order: o._id, customer: o.customer,
     subtotal, fees: o.totalAmount - subtotal, total: o.totalAmount, status: paid >= o.totalAmount ? 'paid' : 'issued', issuedAt: new Date() });
 }
 

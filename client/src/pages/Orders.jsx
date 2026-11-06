@@ -20,9 +20,20 @@ export default function Orders({ me }) {
   const [accessKey, setAccessKey] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [deleting, setDeleting] = useState(false);
-  const closePastDelete = () => { if (!deleting) { setPastDelete(null); setAccessKey(''); setDeleteError(''); } };
-  const load = () => api('/orders').then(setOrders).catch(e => setErr(e.message));
-  useEffect(() => { load(); api('/customers').then(setCustomers); }, []);
+  const [deletePreview, setDeletePreview] = useState(null);
+  const [confirmation, setConfirmation] = useState('');
+  const [showDeleted, setShowDeleted] = useState(false);
+  useEffect(() => {
+    if (!pastDelete) return;
+    let active = true;
+    api(`/orders/${pastDelete._id}/past-delete-preview`).then(data => { if (active) setDeletePreview(data); })
+      .catch(x => { if (active) setDeleteError(x.message); });
+    return () => { active = false; };
+  }, [pastDelete?._id]);
+  const closePastDelete = () => { if (!deleting) { setPastDelete(null); setAccessKey(''); setDeleteError(''); setConfirmation(''); setDeletePreview(null); } };
+  const load = () => api('/orders' + (showDeleted ? '?deleted=true' : '')).then(setOrders).catch(e => setErr(e.message));
+  useEffect(() => { load(); }, [showDeleted]);
+  useEffect(() => { api('/customers').then(setCustomers); }, []);
 
   const ready = form && form.start && form.end && new Date(form.start) < new Date(form.end);
   useEffect(() => {
@@ -64,15 +75,20 @@ export default function Orders({ me }) {
     if (deleting) return;
     setDeleting(true); setDeleteError('');
     try {
-      await api(`/orders/${pastDelete._id}/past`, { method: 'DELETE', body: { accessKey } });
-      setPastDelete(null); setAccessKey(''); load();
+      await api(`/orders/${pastDelete._id}/past`, { method: 'DELETE', body: { accessKey, confirmation } });
+      setPastDelete(null); setAccessKey(''); setConfirmation(''); setDeletePreview(null); load();
     } catch (x) { setDeleteError(x.message); }
     finally { setDeleting(false); }
+  }
+  function openPastDelete(o) {
+    setPastDelete(o); setAccessKey(''); setConfirmation(''); setDeleteError(''); setDeletePreview(null);
   }
 
   return (
     <>
-      <div className="bar"><button className="btn" onClick={() => { setErr(''); setForm(blank); }}>New order</button></div>
+      <div className="bar"><button className="btn" onClick={() => { setErr(''); setForm(blank); }}>New order</button>
+        {me?.role === 'owner' && <label className="check"><input type="checkbox" checked={showDeleted} onChange={e => setShowDeleted(e.target.checked)} /> Previously hidden past orders</label>}
+      </div>
       {err && !form && <p className="bad">{err}</p>}
       {orders.length === 0 ? <div className="empty"><h2>No orders yet</h2><p>Create an order after adding a customer and some equipment.</p></div> : (
         <div className="tablewrap"><table>
@@ -84,7 +100,7 @@ export default function Orders({ me }) {
               <td data-l="Items">{o.items.map(i => `${i.quantity}× ${i.equipment?.name}`).join(', ')}</td>
               <td data-l="Total">{lkr(o.totalAmount)}<small>{o.periods}× 36h</small></td>
               <td data-l="Status"><span className={'tag ' + (o.status === 'cancelled' ? 'needs_repair' : '')}>{o.status}</span></td>
-              <td className="acts">{o.customer?.detailsPending && <button onClick={() => setDetails(o.customer)}>Add details</button>}{o.status === 'reserved' && <><button onClick={() => setEditing(o)}>Change items</button><button onClick={() => cancel(o)}>Cancel</button></>}{['reserved', 'cancelled'].includes(o.status) && <button onClick={() => remove(o)}>Delete</button>}{o.status === 'completed' && me?.role === 'owner' && <button onClick={() => { setPastDelete(o); setAccessKey(''); setDeleteError(''); }}>Delete past order</button>}</td>
+              <td className="acts">{o.customer?.detailsPending && <button onClick={() => setDetails(o.customer)}>Add details</button>}{o.status === 'reserved' && <><button onClick={() => setEditing(o)}>Change items</button><button onClick={() => cancel(o)}>Cancel</button></>}{['reserved', 'cancelled'].includes(o.status) && <button onClick={() => remove(o)}>Delete</button>}{o.status === 'completed' && me?.role === 'owner' && <button onClick={() => openPastDelete(o)}>Delete past order</button>}</td>
             </tr>))}</tbody>
         </table></div>)}
       {editing && <EditOrder order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
@@ -92,13 +108,21 @@ export default function Orders({ me }) {
       {pastDelete && (
         <div className="modal" onClick={closePastDelete}>
           <form onClick={e => e.stopPropagation()} onSubmit={removePast}>
-            <h2>Delete past order {pastDelete.orderNo}</h2>
-            <p>This completed order will be removed from Orders and Calendar. Payment, invoice and return history, financial totals and stock will stay unchanged.</p>
+            <h2>Permanently delete {pastDelete.orderNo}</h2>
+            <p className="bad">This permanently deletes the order and its payments, invoices, rental, returns and stock transaction history. This cannot be undone. Revenue and report totals will change.</p>
+            <p>The customer and equipment remain. Physical stock quantities stay unchanged. Deletion does not refund money or remove PDFs already downloaded or sent.</p>
+            {!deletePreview && !deleteError && <p>Loading records to be deleted…</p>}
+            {deletePreview && <div className="card">
+              <p>Order total: <b>{lkr(deletePreview.totalAmount)}</b> · Net recorded payments: <b>{lkr(deletePreview.netPayments)}</b></p>
+              <p>{deletePreview.counts.orderItems} order items · {deletePreview.counts.payments} payments · {deletePreview.counts.invoices} invoices</p>
+              <p>{deletePreview.counts.rentals} rentals · {deletePreview.counts.returns} returns · {deletePreview.counts.returnItems} return items · {deletePreview.counts.stockTransactions} stock transactions</p>
+            </div>}
             <label>Owner delete access key (12–128 characters)<input required autoFocus type="password" autoComplete="off" minLength={12} maxLength={128}
               value={accessKey} onChange={e => setAccessKey(e.target.value)} disabled={deleting} /></label>
+            <label>Type {pastDelete.orderNo} to confirm<input required autoComplete="off" value={confirmation} onChange={e => setConfirmation(e.target.value)} disabled={deleting} /></label>
             {deleteError && <p className="bad" role="alert">{deleteError}</p>}
             <div className="row end"><button type="button" disabled={deleting} onClick={closePastDelete}>Cancel</button>
-              <button className="btn" disabled={deleting || !accessKey.trim()}>{deleting ? 'Deleting…' : 'Confirm delete'}</button></div>
+              <button className="btn" disabled={deleting || !deletePreview || !accessKey.trim() || confirmation !== pastDelete.orderNo}>{deleting ? 'Deleting…' : 'Delete permanently'}</button></div>
           </form>
         </div>
       )}

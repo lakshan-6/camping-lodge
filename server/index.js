@@ -18,6 +18,7 @@ import { requireAuth, requireAdmin, validateAuthConfig } from './utils/auth.js';
 import payments from './routes/payments.js';
 import invoices from './routes/invoices.js';
 import { serveClient } from './utils/production.js';
+import { initializeDocumentNumbers } from './utils/documentNumbers.js';
 
 validateAuthConfig();
 const app = express();
@@ -68,6 +69,7 @@ mongoose.connect(uri)
   .then(async () => {
     console.log('MongoDB connected');
     await promoteOwner();
+    await initializeDocumentNumbers();
     app.listen(process.env.PORT || 5000, () => console.log('API on port ' + (process.env.PORT || 5000)));
   })
   .catch(e => { console.error('MongoDB connection failed:', e.message); process.exit(1); });

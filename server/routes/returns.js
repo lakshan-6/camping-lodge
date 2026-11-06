@@ -3,6 +3,7 @@ import { Order, OrderItem, Payment, Rental, Return, ReturnItem, Equipment, Invoi
 import { PERIOD_MS, httpErr } from '../utils/availability.js';
 import { getSettings } from './settings.js';
 import { paidTotal, settleInvoice } from '../utils/invoiceMail.js';
+import { withOrderLock } from '../utils/orderDeletion.js';
 
 const r = Router();
 const wrap = fn => (req, res, next) => fn(req, res).catch(next);
@@ -31,6 +32,9 @@ r.get('/preview/:rental', wrap(async (req, res) => {
 }));
 
 r.post('/', wrap(async (req, res) => {
+  const linked = await Rental.findById(req.body.rental);
+  if (!linked) throw httpErr(404, 'Rental not found');
+  return withOrderLock(linked.order, async () => {
   const rental = await Rental.findById(req.body.rental);
   if (!rental) throw httpErr(404, 'Rental not found');
   if (rental.status === 'returned') throw httpErr(409, 'Already returned');
@@ -79,5 +83,6 @@ r.post('/', wrap(async (req, res) => {
   let extra = {};
   try { extra = await settleInvoice(ord._id); } catch (e) { extra = { emailNote: `Return saved, but the invoice step failed: ${e.message}.` }; }
   res.status(201).json({ ...ret.toObject(), ...extra });
+  });
 }));
 export default r;

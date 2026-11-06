@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { Order, OrderItem, Invoice, Payment } from '../models/index.js';
 import { createInvoice, emailInvoice, invoicePdfBuffer } from '../utils/invoiceMail.js';
 import { httpErr } from '../utils/availability.js';
+import { withOrderLock } from '../utils/orderDeletion.js';
 
 const r = Router();
 const wrap = fn => (req, res, next) => fn(req, res).catch(next);
@@ -20,12 +21,12 @@ r.get('/:id', wrap(async (req, res) => {
 }));
 
 // Create after the return is recorded, so late/damage fees are included in the total
-r.post('/', wrap(async (req, res) => {
+r.post('/', wrap(async (req, res) => withOrderLock(req.body.order, async () => {
   const o = await Order.findById(req.body.order);
   if (!o) throw httpErr(404, 'Order not found');
   if (await Invoice.findOne({ order: o._id, status: { $ne: 'void' } })) throw httpErr(409, 'This order already has an invoice');
   res.status(201).json(await createInvoice(o));
-}));
+})));
 
 r.get('/:id/pdf', wrap(async (req, res) => {
   const { buffer, invoiceNo } = await invoicePdfBuffer(req.params.id);

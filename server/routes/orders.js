@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
 import { Order, OrderItem, Payment, Invoice } from '../models/index.js';
 import { availability, countPeriods, httpErr } from '../utils/availability.js';
+import { nextDocumentNumber } from '../utils/documentNumbers.js';
+import { previewOrderDeletion, permanentlyDeleteOrder } from '../utils/orderDeletion.js';
 
 const r = Router();
 const wrap = fn => (req, res, next) => fn(req, res).catch(next);
@@ -42,7 +44,10 @@ async function priceLines(wanted, s, e, exclude) {
 }
 
 r.get('/', wrap(async (req, res) => {
-  const orders = await Order.find({ deletedAt: null }).sort({ createdAt: -1 }).populate('customer', 'name phone nic address email detailsPending').lean();
+  const hidden = req.query.deleted === 'true';
+  if (hidden && req.user.role !== 'owner') throw httpErr(403, 'Owner only');
+  const filter = hidden ? { deletedAt: { $ne: null }, status: 'completed' } : { deletedAt: null };
+  const orders = await Order.find(filter).sort({ createdAt: -1 }).populate('customer', 'name phone nic address email detailsPending').lean();
   const items = await OrderItem.find({ order: { $in: orders.map(o => o._id) } }).populate('equipment', 'name').lean();
   res.json(orders.map(o => ({ ...o, items: items.filter(i => String(i.order) === String(o._id)) })));
 }));
@@ -53,8 +58,8 @@ r.post('/', wrap(async (req, res) => {
   const { s, e, wanted } = parse(req.body);
   const order = await serial(async () => {
     const { lines, total, deposit, periods } = await priceLines(wanted, s, e);
-    const n = (await Order.countDocuments()) + 1;
-    const o = await Order.create({ orderNo: 'CL-' + String(n).padStart(4, '0'), customer, startDate: s, endDate: e,
+    const orderNo = await nextDocumentNumber('order');
+    const o = await Order.create({ orderNo, customer, startDate: s, endDate: e,
       periods, totalAmount: total, depositAmount: deposit, notes });
     await OrderItem.insertMany(lines.map(l => ({ ...l, order: o._id })));
     return o;
@@ -90,6 +95,10 @@ r.patch('/:id/cancel', wrap(async (req, res) => {
 }));
 
 // Owner-only removal of completed orders, with a separate server-side access key.
+r.get('/:id/past-delete-preview', ownerOnly, wrap(async (req, res) => {
+  res.json(await previewOrderDeletion(req.params.id));
+}));
+
 r.delete('/:id/past', ownerOnly, pastDeleteLimit, wrap(async (req, res) => {
   const expected = process.env.PAST_ORDER_DELETE_KEY;
   if (!expected || expected.length < 12 || expected.length > 128)
@@ -98,17 +107,8 @@ r.delete('/:id/past', ownerOnly, pastDeleteLimit, wrap(async (req, res) => {
   const digest = value => crypto.createHash('sha256').update(value).digest();
   if (typeof supplied !== 'string' || supplied.length > 128 || !crypto.timingSafeEqual(digest(supplied.trim()), digest(expected)))
     throw httpErr(403, 'Incorrect delete access key');
-  // Preserve the completed status and every accounting/stock record. This only
-  // removes the order from the order list and calendar; it does not undo a rental.
-  const o = await Order.findOneAndUpdate({ _id: req.params.id, deletedAt: null, status: 'completed' }, {
-    $set: { deletedAt: new Date(), deletedBy: req.user._id }
-  }, { new: true });
-  if (!o) {
-    const existing = await Order.findById(req.params.id);
-    if (!existing || existing.deletedAt) throw httpErr(404, 'Order not found');
-    throw httpErr(409, 'Only completed orders can be deleted here. Receive outstanding returns first.');
-  }
-  res.json({ ok: true });
+  const deleted = await permanentlyDeleteOrder(req.params.id, req.body.confirmation);
+  res.json({ ok: true, deleted });
 }));
 
 // Hide abandoned bookings while retaining accounting history and order numbers.

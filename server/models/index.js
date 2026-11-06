@@ -3,6 +3,8 @@ const { Schema, model } = mongoose;
 const ref = (m, extra = {}) => ({ type: Schema.Types.ObjectId, ref: m, ...extra });
 const opts = { timestamps: true };
 
+export const Counter = model('Counter', new Schema({ _id: String, value: { type: Number, default: 0 } }));
+
 export const Equipment = model('Equipment', new Schema({
   name: { type: String, required: true, trim: true },
   category: { type: String, required: true, trim: true },
