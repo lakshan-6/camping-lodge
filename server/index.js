@@ -14,10 +14,11 @@ import auth from './routes/auth.js';
 import users from './routes/users.js';
 import reports from './routes/reports.js';
 import settings from './routes/settings.js';
-import { requireAuth, requireAdmin } from './utils/auth.js';
+import { requireAuth, requireAdmin, validateAuthConfig } from './utils/auth.js';
 import payments from './routes/payments.js';
 import invoices from './routes/invoices.js';
 
+validateAuthConfig();
 const app = express();
 app.use(cors());
 app.use(express.json());

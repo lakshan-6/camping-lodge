@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { User } from '../models/index.js';
-import { hashPassword } from '../utils/auth.js';
+import { hashPassword, validatePassword } from '../utils/auth.js';
 import { httpErr } from '../utils/availability.js';
 
 const r = Router();
@@ -18,9 +18,10 @@ r.get('/', wrap(async (req, res) => res.json((await User.find().select('-passwor
 
 r.post('/', wrap(async (req, res) => {
   const { name, username, password, role } = req.body;
-  if (!name || !username || !password || password.length < 6) throw httpErr(400, 'Name, username and a password of at least 6 characters are required');
+  if (typeof name !== 'string' || !name.trim() || name.length > 100 || typeof username !== 'string' || !/^[a-zA-Z0-9_.-]{3,64}$/.test(username)) throw httpErr(400, 'Enter a valid name and username (3 to 64 characters)');
+  validatePassword(password);
   if (await User.findOne({ username: username.toLowerCase().trim() })) throw httpErr(409, 'That username is taken');
-  const u = await User.create({ name, username, passwordHash: hashPassword(password),
+  const u = await User.create({ name, username, passwordHash: await hashPassword(password),
     role: req.user.role === 'owner' && role === 'admin' ? 'admin' : 'staff' });
   res.status(201).json(shape(u));
 }));
@@ -33,9 +34,10 @@ r.patch('/:id', wrap(async (req, res) => {
   if (req.body.active === false && self) throw httpErr(400, "You can't disable your own account");
   if (typeof req.body.active === 'boolean' && !self) u.active = req.body.active;
   if (req.body.password) {
-    if (req.body.password.length < 6) throw httpErr(400, 'Password must be at least 6 characters');
-    u.passwordHash = hashPassword(req.body.password);
+    validatePassword(req.body.password);
+    u.passwordHash = await hashPassword(req.body.password);
   }
+  if (req.body.active === false) u.sessionVersion = (u.sessionVersion || 0) + 1;
   await u.save();
   res.json(shape(u));
 }));

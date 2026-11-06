@@ -30,7 +30,7 @@ export default function Staff({ me }) {
           <tr key={u._id}><td data-l="Name"><b>{u.name}</b>{u._id === me.id && <small>(you)</small>}</td><td data-l="Username">{u.username}</td><td data-l="Role">{u.role}</td>
             <td data-l="Status"><span className={'dot' + (u.online ? ' on' : '')} />{!u.active ? 'disabled' : u.online ? 'online' : 'offline'}</td>
             <td className="acts">
-              {(u._id === me.id || canManage(u)) && <button onClick={() => { const p = prompt('New password for ' + u.username + ' (6+ characters)'); if (p) patch(u, { password: p }); }}>Reset password</button>}
+              {(u._id === me.id || canManage(u)) && <button onClick={() => { const p = prompt('New password for ' + u.username + ' (12–128 characters)'); if (p) patch(u, { password: p }); }}>Reset password</button>}
               {canManage(u) && <button onClick={() => patch(u, { active: !u.active })}>{u.active ? 'Disable' : 'Enable'}</button>}
               {canManage(u) && <button onClick={() => del(u)}>Delete</button>}
             </td></tr>))}</tbody></table></div>
@@ -40,7 +40,7 @@ export default function Staff({ me }) {
             <h2>Add user</h2>
             <label>Name<input required value={form.name} onChange={set('name')} /></label>
             <label>Username<input required value={form.username} onChange={set('username')} /></label>
-            <label>Password (6+ characters)<input required type="password" value={form.password} onChange={set('password')} /></label>
+            <label>Password (12–128 characters)<input required type="password" value={form.password} onChange={set('password')} /></label>
             {isOwner && <label>Role<select value={form.role} onChange={set('role')}><option value="staff">Staff (no Reports, Settings or Staff Access)</option><option value="admin">Admin (full access, cannot delete other admins)</option></select></label>}
             {err && <p className="bad">{err}</p>}
             <div className="row end"><button type="button" onClick={() => setForm(null)}>Cancel</button><button className="btn">Add user</button></div>

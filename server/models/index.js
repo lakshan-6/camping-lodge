@@ -101,6 +101,7 @@ export const User = model('User', new Schema({
   username: { type: String, required: true, unique: true, lowercase: true, trim: true },
   name: { type: String, required: true, trim: true },
   passwordHash: { type: String, required: true },
+  sessionVersion: { type: Number, default: 0 },
   role: { type: String, enum: ['owner', 'admin', 'staff'], default: 'staff' },
   lastSeenAt: Date,
   active: { type: Boolean, default: true },
