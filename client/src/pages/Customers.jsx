@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { PhoneInput, NicInput } from '../components/ContactInputs.jsx';
 
 const blank = { name: '', phone: '', nic: '', email: '', address: '', notes: '' };
 
@@ -41,8 +42,8 @@ export default function Customers() {
           <form onClick={e => e.stopPropagation()} onSubmit={save}>
             <h2>{form._id ? 'Edit customer' : 'Add customer'}</h2>
             <label>Name<input required value={form.name} onChange={set('name')} /></label>
-            <label>Phone<input required value={form.phone} onChange={set('phone')} /></label>
-            <label>NIC<input value={form.nic || ''} onChange={set('nic')} /></label>
+            <label>Phone<PhoneInput required value={form.phone} onChange={phone => setForm({ ...form, phone })} /></label>
+            <label>NIC<NicInput value={form.nic} onChange={nic => setForm({ ...form, nic })} /></label>
             <label>Email (invoices are sent here)<input type="email" value={form.email || ''} onChange={set('email')} /></label>
             <label>Address<input value={form.address || ''} onChange={set('address')} /></label>
             <label>Notes<textarea rows="2" value={form.notes || ''} onChange={set('notes')} /></label>

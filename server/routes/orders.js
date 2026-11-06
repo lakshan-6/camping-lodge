@@ -36,7 +36,7 @@ async function priceLines(wanted, s, e, exclude) {
 }
 
 r.get('/', wrap(async (req, res) => {
-  const orders = await Order.find().sort({ createdAt: -1 }).populate('customer', 'name phone nic address email detailsPending').lean();
+  const orders = await Order.find({ deletedAt: null }).sort({ createdAt: -1 }).populate('customer', 'name phone nic address email detailsPending').lean();
   const items = await OrderItem.find({ order: { $in: orders.map(o => o._id) } }).populate('equipment', 'name').lean();
   res.json(orders.map(o => ({ ...o, items: items.filter(i => String(i.order) === String(o._id)) })));
 }));
@@ -81,5 +81,20 @@ r.patch('/:id/cancel', wrap(async (req, res) => {
   if (o.status !== 'reserved') throw httpErr(409, 'Only reserved orders can be cancelled');
   o.status = 'cancelled'; await o.save();
   res.json(o);
+}));
+
+// Hide abandoned bookings while retaining order references for payment/invoice history.
+// Keep the record so count-based order numbers are never reused after deletion.
+r.delete('/:id', wrap(async (req, res) => {
+  const o = await Order.findOneAndUpdate({ _id: req.params.id, deletedAt: null,
+    status: { $in: ['reserved', 'cancelled'] } }, {
+    $set: { status: 'cancelled', deletedAt: new Date(), deletedBy: req.user._id }
+  }, { new: true });
+  if (!o) {
+    const existing = await Order.findById(req.params.id);
+    if (!existing || existing.deletedAt) throw httpErr(404, 'Booking not found');
+    throw httpErr(409, 'Only bookings that have not been picked up can be deleted');
+  }
+  res.json({ ok: true });
 }));
 export default r;

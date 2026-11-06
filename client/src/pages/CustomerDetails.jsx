@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api.js';
+import { PhoneInput, NicInput } from '../components/ContactInputs.jsx';
 
 // Completes a WhatsApp pre-booking customer's details when they arrive at the shop
 export default function CustomerDetails({ customer, onClose, onSaved }) {
@@ -16,8 +17,8 @@ export default function CustomerDetails({ customer, onClose, onSaved }) {
       <form onClick={e => e.stopPropagation()} onSubmit={save}>
         <h2>Customer details</h2>
         <label>Full name<input required value={f.name} onChange={set('name')} /></label>
-        <label>Phone / WhatsApp<input required value={f.phone} onChange={set('phone')} /></label>
-        <label>NIC<input required value={f.nic} onChange={set('nic')} /></label>
+        <label>Phone / WhatsApp<PhoneInput required value={f.phone} onChange={phone => setF({ ...f, phone })} /></label>
+        <label>NIC<NicInput required value={f.nic} onChange={nic => setF({ ...f, nic })} /></label>
         <label>Email (invoices are sent here)<input type="email" value={f.email} onChange={set('email')} /></label>
         <label>Address<input value={f.address} onChange={set('address')} /></label>
         {err && <p className="bad">{err}</p>}

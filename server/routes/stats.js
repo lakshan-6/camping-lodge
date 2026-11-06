@@ -21,7 +21,7 @@ r.get('/', async (req, res, next) => {
         { $group: { _id: '$r.order', t: { $sum: '$lateFee' } } }]),
       Return.aggregate([{ $match: { returnedAt: { $gte: monthStart } } }, { $group: { _id: null, t: { $sum: '$lateFee' } } }]),
       net(), net(monthStart), net(yearStart),
-      Order.find().sort({ createdAt: -1 }).limit(5).populate('customer', 'name').lean(),
+      Order.find({ deletedAt: null }).sort({ createdAt: -1 }).limit(5).populate('customer', 'name').lean(),
       availability(now, new Date(+now + 1)),
     ]);
     const paid = Object.fromEntries(paidBy.map(p => [String(p._id), p.t]));
@@ -50,7 +50,7 @@ r.get('/summary', async (req, res, next) => {
     const [pay, customers, first] = await Promise.all([
       Payment.aggregate([{ $match: range('paidAt') }, { $group: { _id: null, t: signed } }]),
       Customer.countDocuments(range('createdAt')),
-      Order.findOne().sort({ createdAt: 1 }).select('createdAt').lean(),
+      Order.findOne({ deletedAt: null }).sort({ createdAt: 1 }).select('createdAt').lean(),
     ]);
     res.json({ revenue: pay[0]?.t || 0, customers, since: first?.createdAt || null });
   } catch (e) { next(e); }

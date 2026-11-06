@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
 import CustomerDetails from './CustomerDetails.jsx';
 import EditOrder from './EditOrder.jsx';
+import { PhoneInput, NicInput } from '../components/ContactInputs.jsx';
 
 const fmt = d => new Date(d).toLocaleString('en-LK', { dateStyle: 'medium', timeStyle: 'short' });
 const periodsOf = (s, e) => Math.max(1, Math.ceil((new Date(e) - new Date(s)) / (36 * 3600 * 1000)));
@@ -49,6 +50,10 @@ export default function Orders() {
     if (!confirm(`Cancel order ${o.orderNo}?`)) return;
     try { await api(`/orders/${o._id}/cancel`, { method: 'PATCH' }); load(); } catch (x) { setErr(x.message); }
   }
+  async function remove(o) {
+    if (!confirm(`Delete booking ${o.orderNo}? It will be removed from Orders and the calendar, and its reserved stock will be released. Any payments already recorded will be kept; refunds must be recorded separately.`)) return;
+    try { await api(`/orders/${o._id}`, { method: 'DELETE' }); load(); } catch (x) { setErr(x.message); }
+  }
 
   return (
     <>
@@ -64,7 +69,7 @@ export default function Orders() {
               <td data-l="Items">{o.items.map(i => `${i.quantity}× ${i.equipment?.name}`).join(', ')}</td>
               <td data-l="Total">{lkr(o.totalAmount)}<small>{o.periods}× 36h</small></td>
               <td data-l="Status"><span className={'tag ' + (o.status === 'cancelled' ? 'needs_repair' : '')}>{o.status}</span></td>
-              <td className="acts">{o.customer?.detailsPending && <button onClick={() => setDetails(o.customer)}>Add details</button>}{o.status === 'reserved' && <><button onClick={() => setEditing(o)}>Change items</button><button onClick={() => cancel(o)}>Cancel</button></>}</td>
+              <td className="acts">{o.customer?.detailsPending && <button onClick={() => setDetails(o.customer)}>Add details</button>}{o.status === 'reserved' && <><button onClick={() => setEditing(o)}>Change items</button><button onClick={() => cancel(o)}>Cancel</button></>}{['reserved', 'cancelled'].includes(o.status) && <button onClick={() => remove(o)}>Delete</button>}</td>
             </tr>))}</tbody>
         </table></div>)}
       {editing && <EditOrder order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
@@ -84,10 +89,10 @@ export default function Orders() {
                   <option value="">Choose customer ({matches.length})</option>
                   {matches.map(c => <option key={c._id} value={c._id}>{c.name} · {c.phone}{c.nic ? ' · ' + c.nic : ''}</option>)}</select></> : <>
                 {mode === 'pre' && <p className="hint">For bookings made on WhatsApp. Only the WhatsApp number is needed now. Add the full details when the customer comes to the shop.</p>}
-                <label>{mode === 'pre' ? 'WhatsApp number' : 'Phone'}<input required value={form.nc.phone} onChange={e => setNc('phone', e.target.value)} /></label>
+                <label>{mode === 'pre' ? 'WhatsApp number' : 'Phone'}<PhoneInput required value={form.nc.phone} onChange={v => setNc('phone', v)} /></label>
                 <label>Name{mode === 'pre' ? ' (optional)' : ''}<input required={mode !== 'pre'} value={form.nc.name} onChange={e => setNc('name', e.target.value)} /></label>
                 <div className="row">
-                  {mode !== 'pre' && <label>NIC<input value={form.nc.nic} onChange={e => setNc('nic', e.target.value)} /></label>}
+                  {mode !== 'pre' && <label>NIC<NicInput value={form.nc.nic} onChange={v => setNc('nic', v)} /></label>}
                   <label>Email (invoice is sent here)<input type="email" value={form.nc.email} onChange={e => setNc('email', e.target.value)} /></label>
                 </div></>}
             </div>

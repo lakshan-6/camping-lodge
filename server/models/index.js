@@ -34,6 +34,8 @@ export const Order = model('Order', new Schema({
   depositAmount: { type: Number, default: 0 },
   periods: Number,
   sendVia: { type: String, enum: ['email', 'whatsapp', 'both', 'none'], default: 'email' },  // how the customer gets their invoices
+  deletedAt: Date,
+  deletedBy: ref('User'),
   notes: String,
 }, opts));
 
