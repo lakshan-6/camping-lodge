@@ -55,3 +55,8 @@ Forgot owner password uses an **account recovery code**. When 2FA is enabled, it
 ## External backup connection
 
 See [EXTERNAL_BACKUPS.md](EXTERNAL_BACKUPS.md) for private bucket setup, retention, free-allowance limits and a recovery drill. This update prepares the integration without creating an account or uploading production data to a new provider. Once configured, backups upload encrypted files and read them back to verify integrity. A local-only or failed status means the external copy is not verified. Check file without restoring performs a non-destructive validation; actual restore still needs the owner delete key and exact confirmation.
+## Deleting test customers
+
+On Customers, choose **Delete**, review the customer name and history check, then choose **Delete permanently**. This removes the customer contact record. Any linked order (including hidden or cancelled orders), rental or invoice blocks deletion; remove unwanted test orders and their related records first. There is no automatic cascade into booking history.
+
+Owners and admins can delete customers. Staff need the separate **Delete customers without booking history** permission under Staff access; create/edit permission alone does not allow deletion. Deletion is transactional and audited. Retrying the same deletion does not repeat it. Encrypted backups retain their existing snapshots until normal retention removes them.

@@ -123,6 +123,42 @@ test('business workflows against an isolated real MongoDB replica set',{skip:!pr
   const history=await ok('/customers/'+customer._id+'/history');assert.ok(history.orders.length>=2);assert.ok(history.returns.length>=2);
   const audit=await ok('/manage/audit');assert.ok(audit.some(a=>a.action==='order.created'));assert.equal(JSON.stringify(audit).includes(passwordHash),false);
  });
+ await t.test('customer deletion checks permissions, all history and idempotent retries',async()=>{
+  const createBody={name:'Disposable customer',phone:'0777654321',nic:'200123456789',requestId:crypto.randomUUID()};
+  const disposable=await ok('/customers','POST',createBody),path='/customers/'+disposable._id;
+  assert.equal((await request(path+'/delete-preview','GET',undefined,staffToken)).status,403);
+  assert.equal((await request(path,'DELETE',{},staffToken)).status,403);
+  const preview=await ok(path+'/delete-preview');assert.equal(preview.canDelete,true);assert.equal(preview.orders,0);
+  const users=await M.User.countDocuments(),stock=await M.Equipment.find().lean(),orders=await M.Order.countDocuments();
+  const body={requestId:crypto.randomUUID()};assert.equal((await ok(path,'DELETE',body)).deleted,true);
+  assert.equal((await ok(path,'DELETE',body))._replayed,true);
+  assert.equal(await M.Customer.findById(disposable._id),null);
+  assert.equal(await M.Mutation.countDocuments({'result._id':disposable._id}),0);
+  assert.equal((await request(path+'/history')).status,404);assert.equal((await request(path+'/delete-preview')).status,404);
+  assert.equal((await request(path,'DELETE',{requestId:crypto.randomUUID()})).status,404);
+  assert.equal((await ok('/customers/matches?phone=0777654321')).length,0);
+  assert.equal(await M.User.countDocuments(),users);assert.deepEqual(await M.Equipment.find().lean(),stock);assert.equal(await M.Order.countDocuments(),orders);
+  assert.equal(await M.AuditEvent.countDocuments({action:'customer.deleted',target:disposable._id}),1);
+  assert.equal((await request('/customers/'+customer._id,'DELETE',{})).status,409);
+  const guarded=await M.Customer.create({name:'History guard',phone:'0778888888'}),guardPath='/customers/'+guarded._id;
+  const hidden=await M.Order.create({orderNo:'DELETE-GUARD',customer:guarded._id,...dates(),status:'cancelled',deletedAt:new Date()});
+  assert.equal((await ok(guardPath+'/delete-preview')).orders,1);assert.equal((await request(guardPath,'DELETE',{})).status,409);
+  await M.Order.deleteOne({_id:hidden._id});
+  const invoice=await M.Invoice.create({invoiceNo:'DELETE-GUARD',order:hidden._id,customer:guarded._id});
+  assert.equal((await ok(guardPath+'/delete-preview')).invoices,1);assert.equal((await request(guardPath,'DELETE',{})).status,409);await M.Invoice.deleteOne({_id:invoice._id});
+  const rental=await M.Rental.create({order:hidden._id,customer:guarded._id,dueDate:new Date(),status:'returned'});
+  assert.equal((await ok(guardPath+'/delete-preview')).rentals,1);assert.equal((await request(guardPath,'DELETE',{})).status,409);await M.Rental.deleteOne({_id:rental._id});
+  await ok('/users/'+staff._id,'PATCH',{permissions:['customers.write','customers.delete']});
+  assert.equal((await ok(guardPath,'DELETE',{},staffToken)).deleted,true);
+  const rollback=await ok('/customers','POST',{name:'Rollback test',phone:'0779999999',requestId:crypto.randomUUID()});
+  const auditCreate=M.AuditEvent.create;
+  try{
+   M.AuditEvent.create=async()=>{throw new Error('Simulated audit failure');};
+   assert.equal((await request('/customers/'+rollback._id,'DELETE',{requestId:crypto.randomUUID()})).status,500);
+  }finally{M.AuditEvent.create=auditCreate;}
+  assert.ok(await M.Customer.findById(rollback._id));assert.equal(await M.Mutation.countDocuments({'result._id':rollback._id}),1);
+  await ok('/customers/'+rollback._id,'DELETE',{requestId:crypto.randomUUID()});
+ });
  await t.test('encrypted backups restore atomically and invalidate prior sessions',async()=>{
   const backup=await createBackup('integration-snapshot'),envelope=backupEnvelope(backup),content=decryptSnapshot(envelope);assert.ok(content.collections.Order.length>0);
   const beforeCount=await M.Order.countDocuments();await M.Order.updateOne({_id:order._id},{$set:{notes:'AFTER BACKUP'}});

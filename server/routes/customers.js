@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { Customer,Order,OrderItem,Payment,Return,Rental } from '../models/index.js';
+import { Customer,Order,OrderItem,Payment,Return,Rental,Invoice,Mutation } from '../models/index.js';
 import { httpErr } from '../utils/availability.js';
 import { customerContact } from '../utils/customerContact.js';
 import { mutate,audit } from '../utils/operations.js';
@@ -9,6 +9,12 @@ const esc=s=>String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 export const phoneKey=phone=>phone.startsWith('94')&&phone.length===11?'0'+phone.slice(2):phone;
 const aliases=phone=>{const key=phoneKey(phone);return /^0\d{9}$/.test(key)?[key,'94'+key.slice(1)]:[key];};
 const pick=b=>({name:b.name,phone:b.phone,nic:b.nic,address:b.address,notes:b.notes,email:b.email});
+async function deletionPreview(id,session=null){
+ const customer=await Customer.findById(id).session(session).lean();if(!customer)throw httpErr(404,'Customer not found');
+ // Include cancelled and hidden orders, and any independent rental/invoice references.
+ const orders=await Order.countDocuments({customer:id}).session(session),rentals=await Rental.countDocuments({customer:id}).session(session),invoices=await Invoice.countDocuments({customer:id}).session(session);
+ return {customer:{_id:customer._id,name:customer.name},orders,rentals,invoices,canDelete:orders+rentals+invoices===0};
+}
 async function matchesContact(body,exclude,session=null){
  const clauses=[];if(body.phone)clauses.push({phone:{$in:aliases(body.phone)}},{phoneKey:phoneKey(body.phone)});
  if(body.nic)clauses.push({nic:new RegExp('^'+esc(body.nic)+'$','i')});
@@ -17,6 +23,18 @@ async function matchesContact(body,exclude,session=null){
 }
 r.get('/matches',wrap(async(req,res)=>{res.json(await matchesContact({phone:String(req.query.phone||''),nic:String(req.query.nic||'').toUpperCase()},req.query.exclude));}));
 r.get('/',wrap(async(req,res)=>{const q=String(req.query.q||''),filter=q?{$or:[{name:new RegExp(esc(q),'i')},{phone:new RegExp(esc(q),'i')},{nic:new RegExp(esc(q),'i')}]}:{};res.json(await Customer.find(filter).sort({name:1}));}));
+r.get('/:id/delete-preview',requirePermission('customers.delete'),wrap(async(req,res)=>res.json(await deletionPreview(req.params.id))));
+r.delete('/:id',requirePermission('customers.delete'),wrap(async(req,res)=>{
+ res.json(await mutate(req,'customer.delete:'+req.params.id,async session=>{
+  const preview=await deletionPreview(req.params.id,session);
+  if(!preview.canDelete)throw httpErr(409,'This customer has order, rental or invoice history and cannot be deleted. Remove test orders and their related records first.');
+  await Customer.deleteOne({_id:req.params.id},{session});
+  // Remove cached customer data so a retried old create/edit cannot return a deleted record.
+  await Mutation.deleteMany({_id:/:customer\.(create|edit):/,'result._id':{$in:[preview.customer._id,String(preview.customer._id)]}},{session});
+  await audit(session,req.user,'customer.deleted',req.params.id,{name:preview.customer.name},null);
+  return {deleted:true,customerId:req.params.id};
+ }));
+}));
 r.get('/:id/history',wrap(async(req,res)=>{
  const customer=await Customer.findById(req.params.id).lean();if(!customer)throw httpErr(404,'Customer not found');
  const orders=await Order.find({customer:customer._id,deletedAt:null}).sort({createdAt:-1}).lean(),ids=orders.map(o=>o._id);
