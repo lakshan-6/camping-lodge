@@ -1,10 +1,14 @@
+import {businessISO,businessInput} from '../businessTime.js';
 import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
 import CustomerDetails from './CustomerDetails.jsx';
 import EditOrder from './EditOrder.jsx';
 import { PhoneInput, NicInput } from '../components/ContactInputs.jsx';
+import CustomerMatches from '../components/CustomerMatches.jsx';
+import OrderWorkspace from '../components/OrderWorkspace.jsx';
+import { can } from '../permissions.js';
 
-const fmt = d => new Date(d).toLocaleString('en-LK', { dateStyle: 'medium', timeStyle: 'short' });
+const fmt = d => new Date(d).toLocaleString('en-LK', { timeZone:'Asia/Colombo', dateStyle: 'medium', timeStyle: 'short' });
 const periodsOf = (s, e) => Math.max(1, Math.ceil((new Date(e) - new Date(s)) / (36 * 3600 * 1000)));
 const blank = { customer: '', cq: '', newCust: false, pre: false, advance: '', advMethod: 'bank_transfer', nc: { name: '', phone: '', nic: '', email: '' }, start: '', end: '', lines: [{ equipment: '', quantity: 1 }] };
 
@@ -23,6 +27,9 @@ export default function Orders({ me }) {
   const [deletePreview, setDeletePreview] = useState(null);
   const [confirmation, setConfirmation] = useState('');
   const [showDeleted, setShowDeleted] = useState(false);
+  const [workspace,setWorkspace] = useState(null);
+  const [cancelling,setCancelling] = useState(null);
+  const [saving,setSaving] = useState(false);
   useEffect(() => {
     if (!pastDelete) return;
     let active = true;
@@ -38,7 +45,7 @@ export default function Orders({ me }) {
   const ready = form && form.start && form.end && new Date(form.start) < new Date(form.end);
   useEffect(() => {
     if (!ready) return setAvail([]);
-    const p = new URLSearchParams({ start: new Date(form.start).toISOString(), end: new Date(form.end).toISOString() });
+    const p = new URLSearchParams({ start: businessISO(form.start), end: businessISO(form.end) });
     api('/availability?' + p).then(d => setAvail(d.items)).catch(e => setErr(e.message));
   }, [form?.start, form?.end]);
 
@@ -53,18 +60,17 @@ export default function Orders({ me }) {
   const setLine = (i, k, v) => setForm({ ...form, lines: form.lines.map((l, j) => j === i ? { ...l, [k]: v } : l) });
 
   async function save(e) {
-    e.preventDefault(); setErr('');
+    e.preventDefault(); if(saving)return;setSaving(true);setErr('');
     try {
       let customer = form.customer;
-      if (form.newCust) { const c = await api('/customers', { method: 'POST', body: { ...form.nc, preBooking: form.pre } }); customer = c._id; setCustomers([...customers, c]); }
-      await api('/orders', { method: 'POST', body: { customer, startDate: new Date(form.start).toISOString(),
-        endDate: new Date(form.end).toISOString(), items: form.lines.filter(l => l.equipment), advance: { amount: +form.advance || 0, method: form.advMethod } } });
+      if (form.newCust) { const c = await api('/customers', { method: 'POST', body: { ...form.nc, preBooking: form.pre, confirmDifferentPerson:form.confirmDifferentPerson,requestId:form.customerRequestId } }); customer = c._id; setCustomers([...customers.filter(x=>x._id!==c._id), c]); }
+      await api('/orders', { method: 'POST', body: { customer, startDate: businessISO(form.start),
+        endDate: businessISO(form.end), items: form.lines.filter(l => l.equipment), advance: { amount: +form.advance || 0, method: form.advMethod },requestId:form.requestId } });
       setForm(null); load();
-    } catch (x) { setErr(x.message); }
+    } catch (x) { setErr(x.message); } finally { setSaving(false); }
   }
   async function cancel(o) {
-    if (!confirm(`Cancel order ${o.orderNo}?`)) return;
-    try { await api(`/orders/${o._id}/cancel`, { method: 'PATCH' }); load(); } catch (x) { setErr(x.message); }
+    setCancelling({order:o,action:'pending',method:'cash',reason:'',requestId:crypto.randomUUID()});
   }
   async function remove(o) {
     if (!confirm(`Delete booking ${o.orderNo}? It will be removed from Orders and the calendar, and its reserved stock will be released. Any payments already recorded will be kept; refunds must be recorded separately.`)) return;
@@ -86,7 +92,7 @@ export default function Orders({ me }) {
 
   return (
     <>
-      <div className="bar"><button className="btn" onClick={() => { setErr(''); setForm(blank); }}>New order</button>
+      <div className="bar">{can(me,'orders.write')&&<button className="btn" onClick={() => { setErr(''); setForm({...blank,requestId:crypto.randomUUID(),customerRequestId:crypto.randomUUID()}); }}>New order</button>}
         {me?.role === 'owner' && <label className="check"><input type="checkbox" checked={showDeleted} onChange={e => setShowDeleted(e.target.checked)} /> Previously hidden past orders</label>}
       </div>
       {err && !form && <p className="bad">{err}</p>}
@@ -100,10 +106,12 @@ export default function Orders({ me }) {
               <td data-l="Items">{o.items.map(i => `${i.quantity}× ${i.equipment?.name}`).join(', ')}</td>
               <td data-l="Total">{lkr(o.totalAmount)}<small>{o.periods}× 36h</small></td>
               <td data-l="Status"><span className={'tag ' + (o.status === 'cancelled' ? 'needs_repair' : '')}>{o.status}</span></td>
-              <td className="acts">{o.customer?.detailsPending && <button onClick={() => setDetails(o.customer)}>Add details</button>}{o.status === 'reserved' && <><button onClick={() => setEditing(o)}>Change items</button><button onClick={() => cancel(o)}>Cancel</button></>}{['reserved', 'cancelled'].includes(o.status) && <button onClick={() => remove(o)}>Delete</button>}{o.status === 'completed' && me?.role === 'owner' && <button onClick={() => openPastDelete(o)}>Delete past order</button>}</td>
+              <td className="acts"><button onClick={()=>setWorkspace(o._id)}>View order</button>{o.customer?.detailsPending && can(me,'customers.write') && <button onClick={() => setDetails(o.customer)}>Add details</button>}{o.status === 'reserved' && can(me,'orders.write') && <><button onClick={() => setEditing(o)}>Change items</button><button onClick={() => cancel(o)}>Cancel</button></>}{['reserved', 'cancelled'].includes(o.status) && can(me,'orders.write') && <button onClick={() => remove(o)}>Remove booking</button>}{o.status === 'completed' && me?.role === 'owner' && <button onClick={() => openPastDelete(o)}>Delete past order</button>}</td>
             </tr>))}</tbody>
         </table></div>)}
       {editing && <EditOrder order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+      {workspace&&<OrderWorkspace id={workspace} me={me} onClose={()=>setWorkspace(null)} onSaved={load}/>}
+      {cancelling&&<div className="modal"><form onSubmit={async e=>{e.preventDefault();if(saving)return;setSaving(true);try{await api(`/orders/${cancelling.order._id}/cancel`,{method:'PATCH',body:cancelling});setCancelling(null);load();}catch(x){setErr(x.message);}finally{setSaving(false);}}}><h2>Cancel {cancelling.order.orderNo}</h2><p>No bank transfer is made by this form. Choose what actually happened to the advance.</p><label>Advance payment action<select value={cancelling.action} onChange={e=>setCancelling({...cancelling,action:e.target.value})}><option value="pending">Refund pending</option>{can(me,'payments.refund')&&<><option value="refund">Refund has been paid to customer</option><option value="keep">Keep advance as agreed cancellation fee</option></>}</select></label><label>Reason<input required value={cancelling.reason} onChange={e=>setCancelling({...cancelling,reason:e.target.value})}/></label><label>Refund method<select value={cancelling.method} onChange={e=>setCancelling({...cancelling,method:e.target.value})}><option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="other">Other</option></select></label>{err&&<p className="bad">{err}</p>}<div className="bar"><button type="button" disabled={saving} onClick={()=>setCancelling(null)}>Close</button><button className="btn" disabled={saving}>Confirm cancellation</button></div></form></div>}
       {details && <CustomerDetails customer={details} onClose={() => setDetails(null)} onSaved={() => { setDetails(null); load(); api('/customers').then(setCustomers); }} />}
       {pastDelete && (
         <div className="modal" onClick={closePastDelete}>
@@ -115,7 +123,7 @@ export default function Orders({ me }) {
             {deletePreview && <div className="card">
               <p>Order total: <b>{lkr(deletePreview.totalAmount)}</b> · Net recorded payments: <b>{lkr(deletePreview.netPayments)}</b></p>
               <p>{deletePreview.counts.orderItems} order items · {deletePreview.counts.payments} payments · {deletePreview.counts.invoices} invoices</p>
-              <p>{deletePreview.counts.rentals} rentals · {deletePreview.counts.returns} returns · {deletePreview.counts.returnItems} return items · {deletePreview.counts.stockTransactions} stock transactions</p>
+              <p>{deletePreview.counts.rentals} rentals · {deletePreview.counts.returns} returns · {deletePreview.counts.returnItems} return items · {deletePreview.counts.stockTransactions} stock transactions · {deletePreview.counts.securityDeposits||0} deposit entries</p>
             </div>}
             <label>Owner delete access key (12–128 characters)<input required autoFocus type="password" autoComplete="off" minLength={12} maxLength={128}
               value={accessKey} onChange={e => setAccessKey(e.target.value)} disabled={deleting} /></label>
@@ -132,7 +140,7 @@ export default function Orders({ me }) {
             <h2>New order</h2>
             <div className="custbox">
               <div className="row3">
-                {[['existing', 'Existing'], ['new', 'New customer'], ['pre', 'WhatsApp pre-booking']].map(([m, l]) => (
+                {[['existing', 'Existing'], ...(can(me,'customers.write')?[['new', 'New customer'], ['pre', 'WhatsApp pre-booking']]:[])].map(([m, l]) => (
                   <button type="button" key={m} className={mode === m ? 'btn' : ''} onClick={() => setForm({ ...form, newCust: m !== 'existing', pre: m === 'pre' })}>{l}</button>))}
               </div>
               {mode === 'existing' ? <>
@@ -142,6 +150,7 @@ export default function Orders({ me }) {
                   {matches.map(c => <option key={c._id} value={c._id}>{c.name} · {c.phone}{c.nic ? ' · ' + c.nic : ''}</option>)}</select></> : <>
                 {mode === 'pre' && <p className="hint">For bookings made on WhatsApp. Only the WhatsApp number is needed now. Add the full details when the customer comes to the shop.</p>}
                 <label>{mode === 'pre' ? 'WhatsApp number' : 'Phone'}<PhoneInput required value={form.nc.phone} onChange={v => setNc('phone', v)} /></label>
+                <CustomerMatches phone={form.nc.phone} nic={form.nc.nic} onChoose={c=>{setCustomers([...customers.filter(x=>x._id!==c._id),c]);setForm({...form,customer:c._id,newCust:false,pre:false});}} confirmDifferent={form.confirmDifferentPerson} onConfirmDifferent={v=>setForm({...form,confirmDifferentPerson:v})}/>
                 <label>Name{mode === 'pre' ? ' (optional)' : ''}<input required={mode !== 'pre'} value={form.nc.name} onChange={e => setNc('name', e.target.value)} /></label>
                 <div className="row">
                   {mode !== 'pre' && <label>NIC<NicInput value={form.nc.nic} onChange={v => setNc('nic', v)} /></label>}
@@ -149,8 +158,8 @@ export default function Orders({ me }) {
                 </div></>}
             </div>
             <div className="row">
-              <label>Pickup<input required type="datetime-local" value={form.start} onChange={e => setForm({ ...form, start: e.target.value })} /></label>
-              <label>Return<input required type="datetime-local" value={form.end} onChange={e => setForm({ ...form, end: e.target.value })} /></label>
+              <label>Pickup (Sri Lanka time)<input required type="datetime-local" value={form.start} onChange={e => setForm({ ...form, start: e.target.value })} /></label>
+              <label>Return (Sri Lanka time)<input required type="datetime-local" value={form.end} onChange={e => setForm({ ...form, end: e.target.value })} /></label>
             </div>
             {ready ? <p>{periods} rental period{periods > 1 ? 's' : ''} (36 hours each)</p> : <p>Choose pickup and return times to see available items.</p>}
             {ready && <div className="lines">
@@ -165,13 +174,13 @@ export default function Orders({ me }) {
               <button type="button" onClick={() => setForm({ ...form, lines: [...form.lines, { equipment: '', quantity: 1 }] })}>Add item</button>
               <p><b>Total: {lkr(total)}</b></p>
               <div className="row">
-                <label>Advance paid (LKR, optional)<input type="number" min="0" value={form.advance} onChange={e => setForm({ ...form, advance: e.target.value })} /></label>
+                {can(me,'payments.record')&&<label>Rental advance paid (LKR, optional)<input type="number" min="0" step="0.01" value={form.advance} onChange={e => setForm({ ...form, advance: e.target.value })} /></label>}
                 <label>Paid by<select value={form.advMethod} onChange={e => setForm({ ...form, advMethod: e.target.value })}>
                   <option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option><option value="card">Card</option><option value="other">Other</option></select></label>
               </div>
             </div>}
             {err && <p className="bad">{err}</p>}
-            <div className="row end"><button type="button" onClick={() => setForm(null)}>Cancel</button><button className="btn" disabled={!ready}>Create order</button></div>
+            <div className="row end"><button type="button" disabled={saving} onClick={() => setForm(null)}>Cancel</button><button className="btn" disabled={!ready||saving}>{saving?'Saving…':'Create order'}</button></div>
           </form>
         </div>)}
     </>

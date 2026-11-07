@@ -1,53 +1,56 @@
 import { Router } from 'express';
-import { Customer, Order, OrderItem, Payment, Rental, InventoryTransaction } from '../models/index.js';
-import { createInvoice, emailInvoice, paidTotal } from '../utils/invoiceMail.js';
-import { Invoice } from '../models/index.js';
-import { httpErr, PERIOD_MS } from '../utils/availability.js';
-
-const r = Router();
-const wrap = fn => (req, res, next) => fn(req, res).catch(next);
-
-r.get('/', wrap(async (req, res) => {
-  const f = req.query.status ? { status: req.query.status } : {};
-  const rentals = await Rental.find(f).sort({ dueDate: 1 }).populate('customer', 'name phone').populate('order', 'orderNo startDate endDate').lean();
-  const items = await OrderItem.find({ order: { $in: rentals.map(x => x.order._id) } }).populate('equipment', 'name').lean();
-  const now = new Date();
-  res.json(rentals.map(x => ({ ...x, overdue: x.status === 'out' && new Date(x.dueDate) < now,
-    items: items.filter(i => String(i.order) === String(x.order._id)) })));
+import { Order, OrderItem, Customer, Rental, Equipment, InventoryTransaction, Invoice } from '../models/index.js';
+import { httpErr, availability, PERIOD_MS } from '../utils/availability.js';
+import { mutate, audit, units } from '../utils/operations.js';
+import { requirePermission, can } from '../utils/permissions.js';
+import { paidTotal, recordPayment, syncInvoice, remainingLines } from '../utils/finance.js';
+import { emailInvoice } from '../utils/invoiceMail.js';
+import { mailReady } from '../utils/mail.js';
+import {getSettings} from './settings.js';
+const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
+r.get('/',wrap(async(req,res)=>{
+ const f=req.query.status?{status:req.query.status}:{};const rows=await Rental.find(f).sort({dueDate:1}).populate('customer','name phone').populate('order','orderNo startDate endDate').lean();
+ const result=[];for(const row of rows)result.push({...row,overdue:row.status==='out'&&new Date(row.dueDate)<new Date(),items:await remainingLines(row.order._id)});res.json(result);
 }));
-
-// Pickup: a reserved order becomes an active rental
-r.post('/start', wrap(async (req, res) => {
-  const o = await Order.findById(req.body.order);
-  if (!o) throw httpErr(404, 'Order not found');
-  if (o.status !== 'reserved') throw httpErr(409, 'Only reserved orders can be picked up');
-  if ((await Customer.findById(o.customer))?.detailsPending) throw httpErr(409, "Add the customer's full details (name and NIC) before handing over the equipment");
-  // Balance paid at the counter on pickup: record it so the invoice is "paid in full"
-  if (req.body.payBalance) {
-    const bal = Math.max(0, o.totalAmount - (await paidTotal(o._id)));
-    const method = ['cash', 'bank_transfer', 'card', 'other'].includes(req.body.method) ? req.body.method : 'cash';
-    if (bal > 0) await Payment.create({ order: o._id, amount: bal, method, type: 'balance' });
-  }
-  // The rental clock starts now: due back = hand-over time + the booked 36h period(s), whatever times the order was booked for
-  const now = new Date(), dueDate = new Date(+now + (o.periods || 1) * PERIOD_MS);
-  const rental = await Rental.create({ order: o._id, customer: o.customer, pickedUpAt: now, dueDate });
-  const via = ['email', 'whatsapp', 'both', 'none'].includes(req.body.sendVia) ? req.body.sendVia : 'email';
-  o.sendVia = via;
-  o.startDate = now; o.endDate = dueDate;   // keeps availability and the calendar in step with the real rental window
-  o.status = 'active'; await o.save();
-  const items = await OrderItem.find({ order: o._id });
-  await InventoryTransaction.insertMany(items.map(i => ({ equipment: i.equipment, type: 'rented_out', quantity: -i.quantity, reference: String(o._id) })));
-  // Invoice at pickup: paid in full -> one "paid" invoice; balance left -> invoice with the balance due
-  let emailNote, whatsappInvoice;
-  try {
-    const inv = (await Invoice.findOne({ order: o._id, status: { $ne: 'void' } })) || (await createInvoice(o));
-    if (via === 'email' || via === 'both') {
-      try { await emailInvoice(inv._id); emailNote = `Invoice ${inv.invoiceNo} (PDF) was emailed to the customer.`; }
-      catch (e) { emailNote = `Rental started, but the invoice was not emailed: ${e.message}.`; }
-    }
-    if (via === 'whatsapp' || via === 'both') whatsappInvoice = inv._id;
-    if (via === 'none') emailNote = `Invoice ${inv.invoiceNo} was created and not sent.`;
-  } catch (e) { emailNote = `Rental started, but the invoice could not be made: ${e.message}.`; }
-  res.status(201).json({ ...rental.toObject(), emailNote, whatsappInvoice });
+r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
+ const result=await mutate(req,'rental.start:'+req.body.order,async session=>{
+  const order=await Order.findById(req.body.order).session(session);if(!order||order.deletedAt)throw httpErr(404,'Order not found');
+  if(order.status!=='reserved'||await Rental.exists({order:order._id}).session(session))throw httpErr(409,'This booking has already been collected or cancelled');
+  const customer=await Customer.findById(order.customer).session(session);if(!customer||customer.detailsPending)throw httpErr(409,'Complete customer name and NIC before handover');
+  const items=await OrderItem.find({order:order._id}).populate('equipment').session(session);
+  await Equipment.updateMany({_id:{$in:items.map(i=>i.equipment._id)}},{$inc:{revision:1}},{session});
+  const now=new Date(),dueDate=new Date(+now+(order.periods||1)*PERIOD_MS);
+  const avail=new Map((await availability(now,dueDate,order._id,session)).map(i=>[String(i._id),i]));
+  for(const i of items)if(!avail.has(String(i.equipment._id))||i.quantity>avail.get(String(i.equipment._id)).available)throw httpErr(409,'Actual pickup time conflicts with another booking. Change the booking or choose different items.');
+  const required=items.flatMap(i=>(i.equipment.checklist||[]).map(part=>`${i.equipment.name}: ${part}`));
+  const confirmed=new Set((req.body.checklist||[]).filter(i=>i.checked).map(i=>i.label));
+  if(required.some(label=>!confirmed.has(label)))throw httpErr(400,'Confirm all equipment handover checklist items');
+  if(req.body.payBalance){const amount=Math.max(0,order.totalAmount-await paidTotal(order._id,session));if(amount)await recordPayment(order,{amount,type:'balance',method:req.body.method},req.user,session);}
+  const [rental]=await Rental.create([{order:order._id,customer:order.customer,pickedUpAt:now,dueDate,pickupChecklist:required.map(label=>({label,checked:true}))}],{session});
+  order.startDate=now;order.endDate=dueDate;order.status='active';order.sendVia=['email','whatsapp','both','none'].includes(req.body.sendVia)?req.body.sendVia:'none';await order.save({session});
+  await InventoryTransaction.insertMany(items.map(i=>({equipment:i.equipment._id,type:'rented_out',quantity:-i.quantity,reference:String(order._id)})),{session});
+  const invoice=await syncInvoice(order,session,true);await audit(session,req.user,'rental.started',order._id,null,{rental:rental._id,dueDate,checklist:rental.pickupChecklist});
+  return {...rental.toObject(),invoiceId:invoice._id,via:order.sendVia};
+ });
+ if(!result._replayed){if(['email','both'].includes(result.via)&&mailReady()){try{await emailInvoice(result.invoiceId);result.emailNote='Invoice emailed.';}catch{result.emailNote='Rental saved. Email delivery failed; use PDF or WhatsApp.';}}
+ if(['whatsapp','both'].includes(result.via))result.whatsappInvoice=result.invoiceId;}
+ res.status(201).json(result);
+}));
+r.post('/:id/extend',requirePermission('rentals.write'),wrap(async(req,res)=>{
+ res.json(await mutate(req,'rental.extend:'+req.params.id,async session=>{
+ const rental=await Rental.findById(req.params.id).session(session);if(!rental||rental.status!=='out')throw httpErr(409,'Only outstanding rentals can be extended');
+ const order=await Order.findById(rental.order).session(session),periods=units(req.body.periods),lines=await remainingLines(order._id,session);
+ if(periods>30)throw httpErr(400,'Extend by at most 30 periods at a time');
+ const now=Date.now(),newDue=new Date(Math.max(+rental.dueDate,now)+periods*PERIOD_MS);
+ await Equipment.updateMany({_id:{$in:lines.map(i=>i.equipment._id)}},{$inc:{revision:1}},{session});
+ const avail=new Map((await availability(rental.dueDate,newDue,order._id,session)).map(i=>[String(i._id),i]));
+ for(const i of lines)if(i.remaining>(avail.get(String(i.equipment._id))?.available||0))throw httpErr(409,'Extension overlaps another booking');
+ const settings=await getSettings(session),rate=lines.reduce((s,i)=>s+i.remaining*i.periodRate,0);
+ const latePeriods=Math.max(0,Math.ceil(Math.max(0,now-+rental.dueDate-(settings.graceMinutes||0)*60000)/PERIOD_MS)-(rental.latePeriodsCharged||0));
+ const lateCharge=Math.round(rate*latePeriods*settings.lateFeePercent)/100;
+ const extra=rate*periods+lateCharge,oldDue=rental.dueDate;
+ rental.dueDate=newDue;rental.latePeriodsCharged=0;await rental.save({session});order.endDate=newDue;order.periods+=periods;order.extensionFees=(order.extensionFees||0)+extra;order.totalAmount+=extra;await order.save({session});
+ await syncInvoice(order,session);await audit(session,req.user,'rental.extended',order._id,{dueDate:oldDue},{dueDate:newDue,fee:extra});return {ok:true,dueDate:newDue,extra};
+ }));
 }));
 export default r;

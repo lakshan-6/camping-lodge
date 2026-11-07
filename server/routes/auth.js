@@ -4,10 +4,11 @@ import { rateLimit } from 'express-rate-limit';
 import { User } from '../models/index.js';
 import { hashPassword, checkPassword, sign, requireAuth } from '../utils/auth.js';
 import { httpErr } from '../utils/availability.js';
+import { permissionsOf } from '../utils/permissions.js';
 
 const r = Router();
 const wrap = fn => (req, res, next) => fn(req, res).catch(next);
-const pub = u => ({ id: u._id, username: u.username, name: u.name, role: u.role });
+const pub = u => ({ id: u._id, username: u.username, name: u.name, role: u.role, permissions: permissionsOf(u) });
 const limit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false,
   message: { error: 'Too many login attempts. Try again in 15 minutes.' } });
 // Bound total password work even when requests come from many addresses.

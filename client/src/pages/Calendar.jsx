@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
+import {businessDate} from '../businessTime.js';
 
-const fmt = d => new Date(d).toLocaleString('en-LK', { dateStyle: 'medium', timeStyle: 'short' });
-const sod = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-const eod = d => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+const fmt = d => new Date(d).toLocaleString('en-LK', { timeZone:'Asia/Colombo', dateStyle: 'medium', timeStyle: 'short' });
+const dayKey = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const sod = d => new Date(dayKey(d)+'T00:00:00+05:30');
+const eod = d => new Date(dayKey(d)+'T23:59:59.999+05:30');
+const todayCell = () => new Date(businessDate()+'T00:00:00');
 const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export default function Calendar() {
-  const [month, setMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
-  const [sel, setSel] = useState(sod(new Date()));
+  const [month, setMonth] = useState(() => { const d = todayCell(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [sel, setSel] = useState(todayCell);
   const [orders, setOrders] = useState([]);
   const [err, setErr] = useState('');
   useEffect(() => { api('/orders').then(o => setOrders(o.filter(x => x.status !== 'cancelled'))).catch(e => setErr(e.message)); }, []);
@@ -18,7 +21,7 @@ export default function Calendar() {
   const count = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
   const cells = [...Array(pad).fill(null), ...Array.from({ length: count }, (_, i) => new Date(month.getFullYear(), month.getMonth(), i + 1))];
   const move = n => setMonth(new Date(month.getFullYear(), month.getMonth() + n, 1));
-  const today = sod(new Date()).getTime();
+  const today = todayCell().getTime();
 
   return (
     <>

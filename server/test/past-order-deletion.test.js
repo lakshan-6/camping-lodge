@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import mongoose from 'mongoose';
 import { once } from 'node:events';
-import { User, Customer, Order, OrderItem, Payment, Invoice, Rental, Return, ReturnItem, Equipment, InventoryTransaction } from '../models/index.js';
+import { User, Customer, DepositTransaction, Mutation, AuditEvent, Order, OrderItem, Payment, Invoice, Rental, Return, ReturnItem, Equipment, InventoryTransaction } from '../models/index.js';
 import { requireAuth, sign } from '../utils/auth.js';
 import orders from '../routes/orders.js';
 
@@ -15,6 +15,7 @@ const id = '112345678901234567890123';
 const other = '112345678901234567890124';
 const fixture = () => ({
   Order: [{ _id: id, orderNo: 'CL-0001', status: 'completed', totalAmount: 5000 }, { _id: other, orderNo: 'CL-0002', status: 'completed', totalAmount: 9000 }],
+  DepositTransaction: [], Mutation: [],
   OrderItem: [{ _id: 'line1', order: id }, { _id: 'line2', order: other }],
   Rental: [{ _id: 'rental1', order: id, status: 'returned' }, { _id: 'rental2', order: other, status: 'returned' }],
   Return: [{ _id: 'return1', rental: 'rental1' }, { _id: 'return2', rental: 'rental2' }],
@@ -59,7 +60,7 @@ test('permanent past-order removal is owner/key protected and transactional', as
     async lean() { return get(); },
     then(resolve, reject) { return Promise.resolve(get()).then(resolve, reject); }
   });
-  for (const model of [Order, OrderItem, Payment, Invoice, Rental, Return, ReturnItem, InventoryTransaction]) {
+  for (const model of [Order, OrderItem, Payment, Invoice, Rental, Return, ReturnItem, InventoryTransaction, DepositTransaction, Mutation]) {
     const name = model.modelName;
     t.mock.method(model, 'find', filter => query(() => db[name].filter(d => matches(d, filter))));
     t.mock.method(model, 'findById', key => query(() => db[name].find(d => d._id === key) || null));
@@ -81,6 +82,7 @@ test('permanent past-order removal is owner/key protected and transactional', as
   });
   for (const model of [Customer, Equipment]) for (const method of ['deleteOne', 'deleteMany', 'updateOne', 'updateMany', 'findByIdAndUpdate'])
     t.mock.method(model, method, () => assert.fail('Shared customer and physical stock must stay unchanged'));
+  t.mock.method(AuditEvent, 'create', async () => []);
   const app = express(); app.use(express.json()); app.use('/orders', requireAuth, orders);
   app.use((e, req, res, next) => res.status(e.status || 500).json({ error: e.message }));
   const server = app.listen(0, '127.0.0.1'); await once(server, 'listening');
@@ -119,7 +121,7 @@ test('permanent past-order removal is owner/key protected and transactional', as
     reset(); const response = await request(actor(), { method: 'GET', path: `/orders/${id}/past-delete-preview` });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { orderNo: 'CL-0001', totalAmount: 5000, netPayments: 4020,
-      counts: { orders: 1, orderItems: 1, payments: 3, invoices: 1, rentals: 1, returns: 1, returnItems: 1, stockTransactions: 2 } });
+      counts: { orders: 1, orderItems: 1, payments: 3, invoices: 1, rentals: 1, returns: 1, returnItems: 1, stockTransactions: 2, securityDeposits: 0 } });
     assert.equal(writes, 0);
   });
   await t.test('exact order-number confirmation is required', async () => {
@@ -131,7 +133,7 @@ test('permanent past-order removal is owner/key protected and transactional', as
     assert.deepEqual(db.Order.map(d => d._id), [other]);
     assert.deepEqual(db.Payment.map(d => d._id), ['payment2']);
     for (const name of ['OrderItem', 'Invoice', 'Rental', 'Return', 'ReturnItem', 'InventoryTransaction']) assert.equal(db[name].length, 1, name);
-    assert.equal(writes, 8);
+    assert.equal(writes, 10);
     assert.equal((await request(actor())).status, 404);
   });
   await t.test('failure midway rolls back every removal and closes the session', async () => {

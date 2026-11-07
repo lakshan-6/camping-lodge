@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import express from 'express';
 import { once } from 'node:events';
-import { User } from '../models/index.js';
+import { User,AuditEvent } from '../models/index.js';
 import { hashPassword, checkPassword, requireAuth, requireAdmin, sign, validateAuthConfig } from '../utils/auth.js';
 import auth from '../routes/auth.js';
 import users from '../routes/users.js';
@@ -12,6 +12,7 @@ process.env.AUTH_SECRET = crypto.randomBytes(32).toString('hex');
 process.env.SETUP_KEY = crypto.randomBytes(32).toString('hex');
 
 test('authentication security regression checks (isolated model doubles)', async t => {
+  t.mock.method(AuditEvent,'create',async()=>[]);
   let account;
   let locked = false;
   let creates = 0;

@@ -1,88 +1,55 @@
 import { Router } from 'express';
-import { Order, OrderItem, Payment, Rental, Return, ReturnItem, Equipment, Invoice, InventoryTransaction } from '../models/index.js';
-import { PERIOD_MS, httpErr } from '../utils/availability.js';
+import { Order, Rental, Return, ReturnItem, OrderItem, Equipment, InventoryTransaction } from '../models/index.js';
+import { PERIOD_MS,httpErr } from '../utils/availability.js';
 import { getSettings } from './settings.js';
-import { paidTotal, settleInvoice } from '../utils/invoiceMail.js';
-import { withOrderLock } from '../utils/orderDeletion.js';
-
-const r = Router();
-const wrap = fn => (req, res, next) => fn(req, res).catch(next);
-
-// Late fee: every extra 36h period (rounded up) costs the order's rental rate x the late-fee % from Settings
-async function lateInfo(rental, lines, at = new Date()) {
-  const late = at - rental.dueDate;
-  const extra = late > 0 ? Math.ceil(late / PERIOD_MS) : 0;
-  const pct = (await getSettings()).lateFeePercent;
-  return { extra, lateFee: Math.round(extra * lines.reduce((s, l) => s + l.quantity * l.periodRate, 0) * pct / 100) };
+import { mutate,audit,money,units } from '../utils/operations.js';
+import { requirePermission,assertPermission } from '../utils/permissions.js';
+import { paidTotal,remainingLines,recordPayment,syncInvoice } from '../utils/finance.js';
+const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
+async function lateInfo(rental,lines,session=null){
+ const settings=await getSettings(session);const late=Date.now()-+rental.dueDate-(settings.graceMinutes||0)*60000;
+ const total=late>0?Math.ceil(late/PERIOD_MS):0,extra=Math.max(0,total-(rental.latePeriodsCharged||0));
+ return {extraPeriods:extra,totalLatePeriods:total,lateFee:Math.round(extra*lines.reduce((s,i)=>s+i.remaining*i.periodRate,0)*settings.lateFeePercent)/100};
 }
-
-r.get('/', wrap(async (req, res) => {
-  res.json(await Return.find().sort({ returnedAt: -1 }).limit(100)
-    .populate({ path: 'rental', populate: [{ path: 'customer', select: 'name' }, { path: 'order', select: 'orderNo' }] }).lean());
+r.get('/',wrap(async(req,res)=>res.json(await Return.find().sort({returnedAt:-1}).limit(200).populate({path:'rental',populate:[{path:'customer',select:'name'},{path:'order',select:'orderNo'}]}).lean())));
+r.get('/preview/:rental',wrap(async(req,res)=>{
+ const rental=await Rental.findById(req.params.rental);if(!rental||rental.status==='returned')throw httpErr(404,'Rental not found');
+ const order=await Order.findById(rental.order),lines=await remainingLines(order._id);
+ res.json({...await lateInfo(rental,lines),balance:Math.max(0,order.totalAmount-await paidTotal(order._id)),items:lines,checklist:rental.pickupChecklist||[]});
 }));
-
-// What the customer still owes, shown before the return is confirmed
-r.get('/preview/:rental', wrap(async (req, res) => {
-  const rental = await Rental.findById(req.params.rental);
-  if (!rental || rental.status === 'returned') throw httpErr(404, 'Rental not found');
-  const lines = await OrderItem.find({ order: rental.order });
-  const ord = await Order.findById(rental.order);
-  const { extra, lateFee } = await lateInfo(rental, lines);
-  res.json({ extraPeriods: extra, lateFee, balance: Math.max(0, ord.totalAmount - (await paidTotal(ord._id))) });
-}));
-
-r.post('/', wrap(async (req, res) => {
-  const linked = await Rental.findById(req.body.rental);
-  if (!linked) throw httpErr(404, 'Rental not found');
-  return withOrderLock(linked.order, async () => {
-  const rental = await Rental.findById(req.body.rental);
-  if (!rental) throw httpErr(404, 'Rental not found');
-  if (rental.status === 'returned') throw httpErr(409, 'Already returned');
-  const lines = await OrderItem.find({ order: rental.order });
-  const rows = lines.map(l => {
-    const x = (req.body.items || []).find(i => String(i.equipment) === String(l.equipment)) || {};
-    const ok = +x.quantityReturned || 0, dmg = +x.quantityDamaged || 0, lost = +x.quantityLost || 0;
-    if (ok < 0 || dmg < 0 || lost < 0 || ok + dmg + lost !== l.quantity)
-      throw httpErr(400, 'Returned + damaged + lost must equal the rented quantity for every item');
-    return { l, ok, dmg, lost };
-  });
-  const now = new Date();
-  const { lateFee } = await lateInfo(rental, lines, now);
-  const damageFee = Math.max(0, +req.body.damageFee || 0);
-  const ord0 = await Order.findById(rental.order);
-  const balance0 = Math.max(0, ord0.totalAmount - (await paidTotal(ord0._id)));   // unpaid rental balance before fees
-
-  const ret = await Return.create({ rental: rental._id, returnedAt: now, lateFee, damageFee, notes: req.body.notes });
-  await ReturnItem.insertMany(rows.map(({ l, ok, dmg, lost }) =>
-    ({ return: ret._id, equipment: l.equipment, quantityReturned: ok, quantityDamaged: dmg, quantityLost: lost })));
-  for (const { l, ok, dmg, lost } of rows) {
-    const tx = [];
-    if (ok) tx.push({ type: 'returned', quantity: ok });
-    if (dmg) tx.push({ type: 'damaged', quantity: 0, note: dmg + ' unit(s) damaged' });
-    if (lost) tx.push({ type: 'lost', quantity: 0, note: lost + ' unit(s) lost' });
-    if (tx.length) await InventoryTransaction.insertMany(tx.map(t => ({ ...t, equipment: l.equipment, reference: String(ret._id) })));
-    if (dmg || lost) await Equipment.updateOne({ _id: l.equipment }, { $inc: { damagedQty: dmg, totalQuantity: -lost } });
-  }
-  rental.status = 'returned'; await rental.save();
-  const ord = await Order.findByIdAndUpdate(rental.order, { status: 'completed', $inc: { totalAmount: lateFee + damageFee } }, { new: true });
-  // Keep the invoice in step with any late/damage fees added at return
-  const inv = await Invoice.findOne({ order: ord._id, status: { $in: ['issued', 'paid'] } });
-  if (inv) {
-    inv.fees = ord.totalAmount - inv.subtotal; inv.total = ord.totalAmount;
-    if (inv.status === 'paid' && lateFee + damageFee > 0) inv.status = 'issued';
-    await inv.save();
-  }
-  // Ticked at the counter: record what the customer paid now
-  const pay = req.body.paid || {};
-  const method = ['cash', 'bank_transfer', 'card', 'other'].includes(req.body.method) ? req.body.method : 'cash';
-  const due = [];
-  if (pay.balance && balance0 > 0) due.push({ amount: balance0, type: 'balance' });
-  if (pay.late && lateFee > 0) due.push({ amount: lateFee, type: 'fee', reference: 'Late fee' });
-  if (pay.damage && damageFee > 0) due.push({ amount: damageFee, type: 'fee', reference: 'Damage / loss fee' });
-  if (due.length) await Payment.insertMany(due.map(d => ({ ...d, order: ord._id, method })));
-  let extra = {};
-  try { extra = await settleInvoice(ord._id); } catch (e) { extra = { emailNote: `Return saved, but the invoice step failed: ${e.message}.` }; }
-  res.status(201).json({ ...ret.toObject(), ...extra });
-  });
+r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
+ res.status(201).json(await mutate(req,'return:'+req.body.rental,async session=>{
+ const rental=await Rental.findById(req.body.rental).session(session);if(!rental)throw httpErr(404,'Rental not found');if(rental.status==='returned')throw httpErr(409,'Already fully returned');
+ const order=await Order.findById(rental.order).session(session),lines=await remainingLines(order._id,session);
+ if(!Array.isArray(req.body.items))throw httpErr(400,'Enter returned quantities');
+ const unique=new Set();for(const i of req.body.items){if(unique.has(String(i.equipment)))throw httpErr(400,'Duplicate return item');unique.add(String(i.equipment));if(!lines.some(l=>String(l.equipment._id)===String(i.equipment)))throw httpErr(400,'Equipment is not part of this rental');}
+ const rows=lines.map(line=>{
+ const row=req.body.items.find(i=>String(i.equipment)===String(line.equipment._id))||{};
+ const ok=units(row.quantityReturned||0,true),dmg=units(row.quantityDamaged||0,true),lost=units(row.quantityLost||0,true);
+ if(ok+dmg+lost>line.remaining)throw httpErr(400,'Return quantity exceeds the outstanding quantity');return {line,ok,dmg,lost,n:ok+dmg+lost};
+ });
+ if(!rows.some(r=>r.n>0))throw httpErr(400,'Return at least one item');
+ const complete=rows.every(r=>r.n===r.line.remaining);
+ const required=(rental.pickupChecklist||[]).map(i=>i.label),confirmed=new Set((req.body.checklist||[]).filter(i=>i.checked).map(i=>i.label));
+ if(complete&&required.some(label=>!confirmed.has(label)))throw httpErr(400,'Confirm all return checklist items');
+ const late=await lateInfo(rental,lines,session),waived=money(req.body.waivedFee||0,'Waived fee',true);
+ if(waived>late.lateFee)throw httpErr(400,'Waiver exceeds the late fee');if(waived){assertPermission(req.user,'fees.waive');if(!req.body.waiverReason?.trim())throw httpErr(400,'Enter a fee waiver reason');}
+ const lateFee=late.lateFee-waived,damageFee=money(req.body.damageFee||0,'Damage fee',true),balanceBefore=Math.max(0,order.totalAmount-await paidTotal(order._id,session));
+ const [ret]=await Return.create([{rental:rental._id,returnedAt:new Date(),lateFee,damageFee,partial:!complete,waivedFee:waived,waiverReason:req.body.waiverReason,notes:req.body.notes,checklist:req.body.checklist||[]}],{session});
+ for(const {line,ok,dmg,lost,n} of rows){if(!n)continue;
+  await ReturnItem.create([{return:ret._id,equipment:line.equipment._id,quantityReturned:ok,quantityDamaged:dmg,quantityLost:lost}],{session});
+  await OrderItem.updateOne({_id:line._id},{$inc:{returnedQuantity:n}},{session});
+  const equipment=await Equipment.findById(line.equipment._id).session(session);
+  if(!equipment||equipment.totalQuantity-lost<equipment.damagedQty+dmg)throw httpErr(409,'Stock figures are inconsistent; check inventory before receiving this return');
+  equipment.damagedQty+=dmg;equipment.totalQuantity-=lost;equipment.revision++;await equipment.save({session});
+  for(const [type,qty,note] of [['returned',ok,''],['damaged',dmg,`${dmg} damaged`],['lost',lost,`${lost} lost`]])if(qty)await InventoryTransaction.create([{equipment:equipment._id,type,quantity:type==='returned'?qty:0,note,reference:String(ret._id)}],{session});
+ }
+ rental.latePeriodsCharged=late.totalLatePeriods;if(complete)rental.status='returned';await rental.save({session});
+ order.totalAmount=money(order.totalAmount+lateFee+damageFee,'Total',true);if(complete)order.status='completed';await order.save({session});
+ const paid=req.body.paid||{};
+ for(const [flag,amount,type,reference] of [['balance',balanceBefore,'balance','Rental balance'],['late',lateFee,'fee','Late fee'],['damage',damageFee,'fee','Damage fee']])if(paid[flag]&&amount)await recordPayment(order,{amount,type,method:req.body.method,reference},req.user,session);
+ await syncInvoice(order,session);await audit(session,req.user,complete?'rental.returned':'rental.partial_return',order._id,null,{return:ret._id,lateFee,damageFee,waived,items:rows.map(r=>({equipment:r.line.equipment._id,returned:r.ok,damaged:r.dmg,lost:r.lost}))});
+ return {...ret.toObject(),emailNote:complete?'Return saved. Invoice and balance updated.':'Partial return saved. Remaining equipment is still out.'};
+ }));
 }));
 export default r;

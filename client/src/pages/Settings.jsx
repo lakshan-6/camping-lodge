@@ -17,6 +17,7 @@ export default function Settings({ onSaved }) {
       <label>Phone / WhatsApp<input value={f.phone} onChange={set('phone')} /></label>
       <label>Address (shown on invoices)<input value={f.address} onChange={set('address')} /></label>
       <label>Late fee: % of the rental rate charged for each extra 36-hour period<input type="number" min="0" value={f.lateFeePercent} onChange={set('lateFeePercent')} /></label>
+      <label>Late return grace period (minutes)<input type="number" min="0" max="1440" step="1" value={f.graceMinutes||0} onChange={set('graceMinutes')}/></label>
       <p>Rental period length is fixed at 36 hours. Currency is LKR.</p>
       {msg && <p className={msg === 'Saved.' ? 'ok' : 'bad'}>{msg}</p>}
       <div><button className="btn">Save settings</button></div>

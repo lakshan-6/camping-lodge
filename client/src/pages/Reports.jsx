@@ -1,11 +1,13 @@
+import {businessDate} from '../businessTime.js';
 import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
+import {downloadFile} from './Management.jsx';
 
-const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const iso = businessDate;
 
 export default function Reports() {
   const now = new Date();
-  const [from, setFrom] = useState(iso(new Date(now.getFullYear(), now.getMonth(), 1)));
+  const [from, setFrom] = useState(iso(now).slice(0,7)+'-01');
   const [to, setTo] = useState(iso(now));
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
@@ -19,12 +21,16 @@ export default function Reports() {
         <label>From<input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
         <label>To<input type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
       </div>
+      <div className="bar">{['orders','payments','inventory','customers','expenses'].map(kind=><button key={kind} onClick={()=>downloadFile(`/manage/export/${kind}?from=${from}&to=${to}`,`camping-lodge-${kind}.csv`).catch(e=>setErr(e.message))}>Export {kind} CSV</button>)}</div>
       {err && <p className="bad">{err}</p>}
       {d && <>
         <div className="cards">
           <div className="card"><span>Revenue (payments received)</span><b>{lkr(d.revenue)}</b></div>
           <div className="card"><span>Orders (by pickup date)</span><b>{d.orders}</b></div>
           <div className="card"><span>Total billed</span><b>{lkr(d.billed)}</b></div>
+          <div className="card"><span>Recorded expenses</span><b>{lkr(d.expenses)}</b></div>
+          <div className="card"><span>Net rental receipts less expenses</span><b>{lkr(d.netCashAfterExpenses)}</b></div>
+          <div className="card"><span>Security deposits currently held</span><b>{lkr(d.securityDepositsHeld)}</b></div>
         </div>
         <h3>Most rented equipment</h3>
         {d.top.length === 0 ? <div className="empty"><p>No rentals in this period.</p></div> : (

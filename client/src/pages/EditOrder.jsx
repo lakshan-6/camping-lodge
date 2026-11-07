@@ -1,7 +1,8 @@
+import {businessISO,businessInput} from '../businessTime.js';
 import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
 
-const local = d => { const t = new Date(d); return new Date(t - t.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+const local = businessInput;
 const periodsOf = (s, e) => Math.max(1, Math.ceil((new Date(e) - new Date(s)) / (36 * 3600 * 1000)));
 
 // Change the items (and times) of an order before the customer picks it up
@@ -14,7 +15,7 @@ export default function EditOrder({ order, onClose, onSaved }) {
   const ok = start && end && new Date(start) < new Date(end);
   useEffect(() => {
     if (!ok) return;
-    const p = new URLSearchParams({ start: new Date(start).toISOString(), end: new Date(end).toISOString(), exclude: order._id });
+    const p = new URLSearchParams({ start: businessISO(start), end: businessISO(end), exclude: order._id });
     api('/availability?' + p).then(d => setAvail(d.items)).catch(e => setErr(e.message));
   }, [start, end]);
   const periods = ok ? periodsOf(start, end) : 0;
@@ -24,7 +25,7 @@ export default function EditOrder({ order, onClose, onSaved }) {
   async function save(e) {
     e.preventDefault(); setErr('');
     try {
-      await api('/orders/' + order._id, { method: 'PUT', body: { startDate: new Date(start).toISOString(), endDate: new Date(end).toISOString(),
+      await api('/orders/' + order._id, { method: 'PUT', body: { startDate: businessISO(start), endDate: businessISO(end),
         items: lines.filter(l => l.equipment).map(l => ({ ...l, quantity: +l.quantity })) } });
       onSaved();
     } catch (x) { setErr(x.message); }
@@ -35,8 +36,8 @@ export default function EditOrder({ order, onClose, onSaved }) {
         <h2>Change {order.orderNo}</h2>
         <p className="hint">{order.customer?.name}. Change the items or times before the customer picks up.</p>
         <div className="row">
-          <label>Pickup<input required type="datetime-local" value={start} onChange={e => setStart(e.target.value)} /></label>
-          <label>Return<input required type="datetime-local" value={end} onChange={e => setEnd(e.target.value)} /></label>
+          <label>Pickup (Sri Lanka time)<input required type="datetime-local" value={start} onChange={e => setStart(e.target.value)} /></label>
+          <label>Return (Sri Lanka time)<input required type="datetime-local" value={end} onChange={e => setEnd(e.target.value)} /></label>
         </div>
         {ok && <p>{periods} rental period{periods > 1 ? 's' : ''} (36 hours each)</p>}
         <div className="lines">

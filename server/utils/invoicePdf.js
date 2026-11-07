@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 
 const logoPath = fileURLToPath(new URL('../assets/logo.png', import.meta.url));
 const lkr = n => 'LKR ' + Number(n || 0).toLocaleString('en-LK');
-const when = d => new Date(d).toLocaleString('en-LK', { dateStyle: 'medium', timeStyle: 'short' });
+const when = d => new Date(d).toLocaleString('en-LK', { timeZone:'Asia/Colombo', dateStyle: 'medium', timeStyle: 'short' });
 
 // Builds the invoice as a PDF (returns a Buffer). The built-in PDF font only supports Latin letters.
 export function invoicePdf({ st, inv, items, paid }) {
@@ -52,7 +52,7 @@ export function invoicePdf({ st, inv, items, paid }) {
       y += bold ? 24 : 19;
     };
     line('Subtotal', lkr(inv.subtotal));
-    if (inv.fees > 0) line('Late / damage fees', lkr(inv.fees));
+    if (inv.fees > 0) line('Extra charges', lkr(inv.fees));
     line('Total', lkr(inv.total), true);
     line('Paid', lkr(paid));
     line(done ? 'Balance' : 'Balance due', lkr(balance), true);

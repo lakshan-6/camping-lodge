@@ -15,12 +15,17 @@ import Calendar from './pages/Calendar.jsx';
 import Reports from './pages/Reports.jsx';
 import Settings from './pages/Settings.jsx';
 import Staff from './pages/Staff.jsx';
+import Today from './pages/Today.jsx';
+import Repairs from './pages/Repairs.jsx';
+import {Expenses,Activity,Backups} from './pages/Management.jsx';
+import {can} from './permissions.js';
 
 const nav = [
   ['/', 'Dashboard'], ['/inventory', 'Inventory'], ['/availability', 'Check Availability'],
   ['/orders', 'Orders'], ['/rentals', 'Rentals'], ['/returns', 'Returns'], ['/customers', 'Customers'],
   ['/calendar', 'Calendar'], ['/billing', 'Billing'], ['/payments', 'Payments'],
   ['/reports', 'Reports'], ['/settings', 'Settings'], ['/staff', 'Staff Access'],
+  ['/today','Today’s work'], ['/repairs','Repairs'], ['/expenses','Expenses'], ['/activity','Activity history'], ['/backups','Backups'],
 ];
 const adminOnly = ['/reports', '/settings', '/staff'];
 
@@ -48,10 +53,18 @@ export default function App() {
   if (!ready) return null;
   if (!user) return <Login onLogin={setUser} />;
   const admin = ['owner', 'admin'].includes(user.role);
-  const pages = { '/': <Dashboard />, '/inventory': <Inventory />, '/availability': <Availability />, '/orders': <Orders me={user} />,
-    '/rentals': <Rentals />, '/returns': <Returns />, '/customers': <Customers />, '/calendar': <Calendar />,
-    '/billing': <Billing />, '/payments': <Payments />, '/reports': <Reports />, '/settings': <Settings onSaved={setSt} />, '/staff': <Staff me={user} /> };
-  const items = nav.filter(([to]) => admin || !adminOnly.includes(to));
+  const pages = { '/': <Dashboard me={user}/>, '/inventory': <Inventory me={user}/>, '/availability': <Availability />, '/orders': <Orders me={user} />,
+    '/rentals': <Rentals me={user}/>, '/returns': <Returns me={user}/>, '/customers': <Customers me={user}/>, '/calendar': <Calendar />,
+    '/billing': <Billing me={user}/>, '/payments': <Payments me={user}/>, '/reports': <Reports />, '/settings': <Settings onSaved={setSt} />, '/staff': <Staff me={user} />,
+    '/today':<Today/>, '/repairs':<Repairs me={user}/>, '/expenses':<Expenses/>, '/activity':<Activity/>, '/backups':<Backups/> };
+  const items = nav.filter(([to]) => {
+    if(['/activity','/backups'].includes(to))return user.role==='owner';
+    if(to==='/repairs')return can(user,'inventory.manage');
+    if(to==='/expenses')return can(user,'expenses.manage');
+    if(to==='/reports')return can(user,'reports.view');
+    if(to==='/payments')return can(user,'finance.view')||can(user,'payments.record')||can(user,'payments.refund');
+    return admin||!adminOnly.includes(to);
+  });
   const title = (nav.find(n => n[0] === pathname) || nav[0])[1];
   const logout = async () => { try { await api('/auth/logout', { method: 'POST' }); } catch { /* ignore */ } setToken(null); location.reload(); };
 

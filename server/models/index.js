@@ -13,6 +13,8 @@ export const Equipment = model('Equipment', new Schema({
   periodRate: { type: Number, required: true, min: 0 },  // LKR per 36-hour period
   deposit: { type: Number, min: 0, default: 0 },          // LKR
   damagedQty: { type: Number, min: 0, default: 0 },       // units damaged / in repair
+  checklist: [String],
+  revision: { type: Number, default: 0 },
   condition: { type: String, enum: ['good', 'fair', 'needs_repair'], default: 'good' },
   notes: String,
   active: { type: Boolean, default: true },
@@ -22,6 +24,7 @@ export const Customer = model('Customer', new Schema({
   name: { type: String, required: true, trim: true },
   phone: { type: String, required: true, trim: true },
   nic: String, address: String, notes: String,
+  phoneKey: { type: String, index: true },
   email: { type: String, trim: true, lowercase: true },
   detailsPending: { type: Boolean, default: false },  // WhatsApp pre-booking: full details still to collect
 }, opts));
@@ -38,6 +41,8 @@ export const Order = model('Order', new Schema({
   sendVia: { type: String, enum: ['email', 'whatsapp', 'both', 'none'], default: 'email' },  // how the customer gets their invoices
   deletedAt: Date,
   deletedBy: ref('User'),
+  cancellation: { action: String, reason: String, refundPending: Number },
+  extensionFees: { type: Number, default: 0 },
   notes: String,
 }, opts));
 
@@ -48,12 +53,15 @@ export const OrderItem = model('OrderItem', new Schema({
   periodRate: { type: Number, required: true },
   periods: { type: Number, required: true, min: 1 },
   lineTotal: { type: Number, required: true },
+  returnedQuantity: { type: Number, default: 0 },
 }, opts));
 
 export const Rental = model('Rental', new Schema({
   order: ref('Order', { required: true }),
   customer: ref('Customer', { required: true }),
   pickedUpAt: Date, dueDate: { type: Date, required: true },
+  pickupChecklist: [{ label: String, checked: Boolean }],
+  latePeriodsCharged: { type: Number, default: 0 },
   status: { type: String, enum: ['out', 'returned', 'overdue'], default: 'out' },
 }, opts));
 
@@ -62,6 +70,10 @@ export const Return = model('Return', new Schema({
   returnedAt: { type: Date, default: Date.now },
   lateFee: { type: Number, default: 0 },
   damageFee: { type: Number, default: 0 },
+  partial: Boolean,
+  waivedFee: Number,
+  waiverReason: String,
+  checklist: [{ label: String, checked: Boolean }],
   notes: String,
 }, opts));
 
@@ -105,6 +117,7 @@ export const User = model('User', new Schema({
   username: { type: String, required: true, unique: true, lowercase: true, trim: true },
   name: { type: String, required: true, trim: true },
   passwordHash: { type: String, required: true },
+  permissions: { type: [String], default: undefined },
   sessionVersion: { type: Number, default: 0 },
   role: { type: String, enum: ['owner', 'admin', 'staff'], default: 'staff' },
   lastSeenAt: Date,
@@ -116,4 +129,27 @@ export const Settings = model('Settings', new Schema({
   phone: { type: String, default: '071 552 4499' },
   address: { type: String, default: '' },
   lateFeePercent: { type: Number, default: 100, min: 0 },  // % of the rental rate charged per extra 36h period
+  graceMinutes: { type: Number, default: 0, min: 0, max: 1440 },
+}, opts));
+
+export const DepositTransaction = model('DepositTransaction', new Schema({
+  order: ref('Order', { required: true, index: true }), type: { type: String, enum: ['collect', 'refund', 'apply'], required: true },
+  amount: { type: Number, min: 0, required: true }, method: String, reason: String, actor: ref('User'),
+}, opts));
+export const AuditEvent = model('AuditEvent', new Schema({
+  actor: ref('User'), actorName: String, action: String, target: String, before: Schema.Types.Mixed, after: Schema.Types.Mixed,
+}, opts));
+export const Mutation = model('Mutation', new Schema({
+  _id: String, fingerprint: String, result: Schema.Types.Mixed,
+}, opts));
+export const Repair = model('Repair', new Schema({
+  equipment: ref('Equipment', { required: true }), quantity: { type: Number, required: true, min: 1 },
+  status: { type: String, enum: ['open', 'completed'], default: 'open' }, notes: String, cost: Number, completedAt: Date,
+}, opts));
+export const Expense = model('Expense', new Schema({
+  amount: { type: Number, min: 0, required: true }, category: String, description: String,
+  spentAt: { type: Date, required: true }, method: String, actor: ref('User'), repair: ref('Repair'),
+}, opts));
+export const Backup = model('Backup', new Schema({
+  day: { type: String, unique: true }, payload: Buffer, iv: Buffer, tag: Buffer, size: Number,
 }, opts));

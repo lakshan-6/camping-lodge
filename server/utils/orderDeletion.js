@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
-import { Order, OrderItem, Payment, Invoice, Rental, Return, ReturnItem, InventoryTransaction } from '../models/index.js';
+import { Order, OrderItem, Payment, Invoice, Rental, Return, ReturnItem, InventoryTransaction, DepositTransaction, Mutation } from '../models/index.js';
 import { httpErr } from './availability.js';
+import { exclusive, audit } from './operations.js';
 
 // Used by the single service instance to keep order writes and deletion in order.
 const locks = new Map();
@@ -30,19 +31,20 @@ async function relatedRecords(id, session) {
   const orderItems = await OrderItem.countDocuments(itemsFilter).session(session);
   const returnItems = await ReturnItem.countDocuments(returnItemsFilter).session(session);
   const stockTransactions = await InventoryTransaction.countDocuments(transactionFilter).session(session);
+  const securityDeposits = await DepositTransaction.countDocuments({ order: order._id }).session(session);
   return { order, rentals, returns, invoices, paymentFilter, itemsFilter, returnItemsFilter, transactionFilter,
     summary: { orderNo: order.orderNo, totalAmount: order.totalAmount,
       netPayments: payments.reduce((sum, p) => sum + (p.type === 'refund' ? -p.amount : p.amount), 0),
       counts: { orders: 1, orderItems, payments: payments.length, invoices: invoices.length,
-        rentals: rentals.length, returns: returns.length, returnItems, stockTransactions } } };
+        rentals: rentals.length, returns: returns.length, returnItems, stockTransactions, securityDeposits } } };
 }
 
 export async function previewOrderDeletion(id) {
-  return withOrderLock(id, async () => (await relatedRecords(id, null)).summary);
+  return exclusive(() => withOrderLock(id, async () => (await relatedRecords(id, null)).summary));
 }
 
-export async function permanentlyDeleteOrder(id, confirmation) {
-  return withOrderLock(id, async () => {
+export async function permanentlyDeleteOrder(id, confirmation, user) {
+  return exclusive(() => withOrderLock(id, async () => {
     const session = await mongoose.startSession();
     try {
       return await session.withTransaction(async () => {
@@ -52,12 +54,15 @@ export async function permanentlyDeleteOrder(id, confirmation) {
         await ReturnItem.deleteMany(data.returnItemsFilter, { session });
         await InventoryTransaction.deleteMany(data.transactionFilter, { session });
         await Payment.deleteMany(data.paymentFilter, { session });
+        await DepositTransaction.deleteMany({ order: data.order._id }, { session });
+        await Mutation.deleteMany({ $or: [{ _id: { $regex: String(data.order._id) } }, { 'result._id': String(data.order._id) }, { 'result.order': String(data.order._id) }] }, { session });
         await Invoice.deleteMany({ order: data.order._id }, { session });
         await Return.deleteMany({ _id: { $in: data.returns.map(r => r._id) } }, { session });
         await Rental.deleteMany({ order: data.order._id }, { session });
         await OrderItem.deleteMany(data.itemsFilter, { session });
         const result = await Order.deleteOne({ _id: data.order._id, status: 'completed' }, { session });
         if (result.deletedCount !== 1) throw httpErr(409, 'Order changed. Refresh and try again.');
+        if (user) await audit(session, user, 'order.permanently_deleted', data.order.orderNo, null, { orderNo: data.order.orderNo, removedRecords: data.summary.counts });
         return data.summary;
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
     } catch (e) {
@@ -65,5 +70,5 @@ export async function permanentlyDeleteOrder(id, confirmation) {
         throw httpErr(503, 'Permanent deletion requires a MongoDB replica set, such as MongoDB Atlas. No records were deleted.');
       throw e;
     } finally { await session.endSession(); }
-  });
+  }));
 }

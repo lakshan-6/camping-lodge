@@ -16,8 +16,8 @@ export async function initializeDocumentNumbers() {
   }
 }
 
-export async function nextDocumentNumber(kind) {
-  const counter = await Counter.findOneAndUpdate({ _id: kind }, { $inc: { value: 1 } }, { new: true });
+export async function nextDocumentNumber(kind, session = null) {
+  const counter = await Counter.findOneAndUpdate({ _id: kind }, { $inc: { value: 1 } }, { new: true, session });
   if (!counter || !kinds[kind]) throw new Error('Document counters have not been initialized');
   return kinds[kind].prefix + String(counter.value).padStart(4, '0');
 }

@@ -1,3 +1,4 @@
+import {businessISO,businessInput} from '../businessTime.js';
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 
@@ -9,14 +10,14 @@ export default function Availability() {
   useEffect(() => {
     setErr(''); setData(null);
     if (!start || !end) return;
-    const p = new URLSearchParams({ start: new Date(start).toISOString(), end: new Date(end).toISOString() });
+    const p = new URLSearchParams({ start: businessISO(start), end: businessISO(end) });
     api('/availability?' + p).then(setData).catch(e => setErr(e.message));
   }, [start, end]);
   return (
     <>
       <div className="bar">
-        <label>From<input type="datetime-local" value={start} onChange={e => setStart(e.target.value)} /></label>
-        <label>To<input type="datetime-local" value={end} onChange={e => setEnd(e.target.value)} /></label>
+        <label>From (Sri Lanka time)<input type="datetime-local" value={start} onChange={e => setStart(e.target.value)} /></label>
+        <label>To (Sri Lanka time)<input type="datetime-local" value={end} onChange={e => setEnd(e.target.value)} /></label>
       </div>
       {err && <p className="bad">{err}</p>}
       {!data && !err && <div className="empty"><h2>Pick a start and end time</h2><p>You'll see how many units of each item are free for those times.</p></div>}

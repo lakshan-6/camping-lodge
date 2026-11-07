@@ -105,3 +105,10 @@ label{font-weight:500}
 
 /* ---- Tick boxes ---- */
 label.check{display:flex;gap:8px;align-items:center;font-size:.95rem;color:var(--ink);font-weight:500}.check input{width:auto}
+.workspace{background:#fff;border-radius:16px;padding:24px;width:min(100%,1050px);max-height:92vh;overflow:auto;display:grid;gap:14px}
+.workspace form{display:grid;gap:12px;max-width:none;max-height:none;padding:14px;border:1px solid var(--line);border-radius:12px}
+.notice{padding:14px;border:1px solid var(--line);background:#f4f8f5;border-radius:10px;margin:10px 0}
+.metric-row{display:flex;gap:20px;flex-wrap:wrap}.metric-row p{margin:0}.metric-row b{display:block}
+.check{display:flex!important;gap:8px;align-items:center}.check input[type=checkbox]{width:auto;flex-shrink:0}
+.workspace pre{white-space:pre-wrap;word-break:break-word;background:#f5f6f7;padding:12px;border-radius:8px;max-height:300px;overflow:auto}
+.card h3{margin-top:0}.tablewrap{margin-top:12px}button:disabled{opacity:.55;cursor:wait}

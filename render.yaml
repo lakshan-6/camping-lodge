@@ -21,3 +21,5 @@ services:
         generateValue: true
       - key: PAST_ORDER_DELETE_KEY
         generateValue: true
+      - key: BACKUP_ENCRYPTION_KEY
+        generateValue: true

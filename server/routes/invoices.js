@@ -1,42 +1,16 @@
 import { Router } from 'express';
-import { Order, OrderItem, Invoice, Payment } from '../models/index.js';
-import { createInvoice, emailInvoice, invoicePdfBuffer } from '../utils/invoiceMail.js';
+import { Order,OrderItem,Invoice,Payment } from '../models/index.js';
+import { emailInvoice,invoicePdfBuffer } from '../utils/invoiceMail.js';
+import { syncInvoice,paidTotal } from '../utils/finance.js';
+import { mutate,audit } from '../utils/operations.js';
+import { requirePermission } from '../utils/permissions.js';
 import { httpErr } from '../utils/availability.js';
-import { withOrderLock } from '../utils/orderDeletion.js';
-
-const r = Router();
-const wrap = fn => (req, res, next) => fn(req, res).catch(next);
-
-r.get('/', wrap(async (req, res) => {
-  res.json(await Invoice.find().sort({ createdAt: -1 }).populate('customer', 'name').populate('order', 'orderNo').lean());
-}));
-
-r.get('/:id', wrap(async (req, res) => {
-  const inv = await Invoice.findById(req.params.id).populate('customer').populate('order').lean();
-  if (!inv) throw httpErr(404, 'Invoice not found');
-  const items = await OrderItem.find({ order: inv.order._id }).populate('equipment', 'name').lean();
-  const pays = await Payment.find({ order: inv.order._id }).lean();
-  const paid = pays.reduce((s, p) => s + (p.type === 'refund' ? -p.amount : p.amount), 0);
-  res.json({ ...inv, items, paid, balance: inv.total - paid });
-}));
-
-// Create after the return is recorded, so late/damage fees are included in the total
-r.post('/', wrap(async (req, res) => withOrderLock(req.body.order, async () => {
-  const o = await Order.findById(req.body.order);
-  if (!o) throw httpErr(404, 'Order not found');
-  if (await Invoice.findOne({ order: o._id, status: { $ne: 'void' } })) throw httpErr(409, 'This order already has an invoice');
-  res.status(201).json(await createInvoice(o));
-})));
-
-r.get('/:id/pdf', wrap(async (req, res) => {
-  const { buffer, invoiceNo } = await invoicePdfBuffer(req.params.id);
-  res.type('application/pdf').set('Content-Disposition', `inline; filename="${invoiceNo}.pdf"`).send(buffer);
-}));
-
-r.post('/:id/email', wrap(async (req, res) => { await emailInvoice(req.params.id); res.json({ ok: true }); }));
-
-r.patch('/:id/void', wrap(async (req, res) => {
-  const inv = await Invoice.findByIdAndUpdate(req.params.id, { status: 'void' }, { new: true });
-  inv ? res.json(inv) : res.status(404).json({ error: 'Not found' });
-}));
+import { mailReady } from '../utils/mail.js';
+const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
+r.get('/',wrap(async(req,res)=>res.json(await Invoice.find().sort({createdAt:-1}).populate('customer','name').populate('order','orderNo').lean())));
+r.get('/:id',wrap(async(req,res)=>{const invoice=await Invoice.findById(req.params.id).populate('customer').populate('order').lean();if(!invoice)throw httpErr(404,'Invoice not found');res.json({...invoice,items:await OrderItem.find({order:invoice.order._id}).populate('equipment','name').lean(),paid:await paidTotal(invoice.order._id),balance:invoice.total-await paidTotal(invoice.order._id)});}));
+r.post('/',requirePermission('payments.record'),wrap(async(req,res)=>res.status(201).json(await mutate(req,'invoice.create:'+req.body.order,async session=>{const order=await Order.findById(req.body.order).session(session);if(!order||order.status==='cancelled')throw httpErr(404,'Order not found');const invoice=await syncInvoice(order,session,true);await audit(session,req.user,'invoice.created',order._id,null,{invoiceNo:invoice.invoiceNo});return invoice;}))));
+r.get('/:id/pdf',wrap(async(req,res)=>{const {buffer,invoiceNo}=await invoicePdfBuffer(req.params.id);res.type('application/pdf').set('Content-Disposition',`inline; filename="${invoiceNo}.pdf"`).send(buffer);}));
+r.post('/:id/email',wrap(async(req,res)=>{if(!mailReady())throw httpErr(503,'Email delivery is not configured. Use PDF or WhatsApp.');await emailInvoice(req.params.id);res.json({ok:true});}));
+r.patch('/:id/void',requirePermission('payments.refund'),wrap(async(req,res)=>res.json(await mutate(req,'invoice.void:'+req.params.id,async session=>{const invoice=await Invoice.findById(req.params.id).session(session);if(!invoice)throw httpErr(404,'Invoice not found');if(invoice.status==='paid')throw httpErr(409,'Record any necessary refund before voiding a paid invoice');const before=invoice.toObject();invoice.status='void';await invoice.save({session});await audit(session,req.user,'invoice.voided',invoice.order,before,invoice);return invoice;}))));
 export default r;

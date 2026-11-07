@@ -13,12 +13,16 @@ import { User } from './models/index.js';
 import auth from './routes/auth.js';
 import users from './routes/users.js';
 import reports from './routes/reports.js';
-import settings from './routes/settings.js';
+import settings, {getSettings} from './routes/settings.js';
 import { requireAuth, requireAdmin, validateAuthConfig } from './utils/auth.js';
 import payments from './routes/payments.js';
 import invoices from './routes/invoices.js';
 import { serveClient } from './utils/production.js';
 import { initializeDocumentNumbers } from './utils/documentNumbers.js';
+import management from './routes/management.js';
+import backups from './routes/backups.js';
+import { startBackupSchedule } from './utils/backups.js';
+import { requirePermission } from './utils/permissions.js';
 
 validateAuthConfig();
 const app = express();
@@ -29,6 +33,7 @@ if (process.env.TRUST_PROXY_HOPS) {
 }
 app.disable('x-powered-by');
 app.use(cors());
+app.use('/api/backups', requireAuth, backups);
 app.use(express.json());
 
 app.get('/api/health', (req, res) =>
@@ -46,10 +51,10 @@ app.use('/api/payments', payments);
 app.use('/api/invoices', invoices);
 app.use('/api/settings', settings);
 app.use('/api/users', requireAdmin, users);
-app.use('/api/reports', requireAdmin, reports);
+app.use('/api/reports', requirePermission('reports.view'), reports);
+app.use('/api/manage', management);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 if (process.env.NODE_ENV === 'production') serveClient(app);
-// Next steps: /api/customers, /api/orders, /api/rentals, /api/returns, /api/payments, /api/invoices
 
 app.use((err, req, res, next) => {
   console.error(err);
@@ -70,6 +75,8 @@ mongoose.connect(uri)
     console.log('MongoDB connected');
     await promoteOwner();
     await initializeDocumentNumbers();
+    await getSettings();
+    startBackupSchedule();
     app.listen(process.env.PORT || 5000, () => console.log('API on port ' + (process.env.PORT || 5000)));
   })
   .catch(e => { console.error('MongoDB connection failed:', e.message); process.exit(1); });

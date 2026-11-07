@@ -1,41 +1,48 @@
 import { Router } from 'express';
-import { Customer } from '../models/index.js';
+import { Customer,Order,OrderItem,Payment,Return,Rental } from '../models/index.js';
 import { httpErr } from '../utils/availability.js';
 import { customerContact } from '../utils/customerContact.js';
-
-const r = Router();
-const wrap = fn => (req, res, next) => fn(req, res).catch(next);
-const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const pick = b => ({ name: b.name, phone: b.phone, nic: b.nic, address: b.address, notes: b.notes, email: b.email });
-
-r.get('/', wrap(async (req, res) => {
-  const q = req.query.q;
-  const f = q ? { $or: [{ name: new RegExp(esc(q), 'i') }, { phone: new RegExp(esc(q), 'i') }, { nic: new RegExp(esc(q), 'i') }] } : {};
-  res.json(await Customer.find(f).sort({ name: 1 }));
+import { mutate,audit } from '../utils/operations.js';
+import { requirePermission,can } from '../utils/permissions.js';
+const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
+const esc=s=>String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+export const phoneKey=phone=>phone.startsWith('94')&&phone.length===11?'0'+phone.slice(2):phone;
+const aliases=phone=>{const key=phoneKey(phone);return /^0\d{9}$/.test(key)?[key,'94'+key.slice(1)]:[key];};
+const pick=b=>({name:b.name,phone:b.phone,nic:b.nic,address:b.address,notes:b.notes,email:b.email});
+async function matchesContact(body,exclude,session=null){
+ const clauses=[];if(body.phone)clauses.push({phone:{$in:aliases(body.phone)}},{phoneKey:phoneKey(body.phone)});
+ if(body.nic)clauses.push({nic:new RegExp('^'+esc(body.nic)+'$','i')});
+ if(!clauses.length)return [];
+ return Customer.find({...(exclude?{_id:{$ne:exclude}}:{}),$or:clauses}).session(session).lean();
+}
+r.get('/matches',wrap(async(req,res)=>{res.json(await matchesContact({phone:String(req.query.phone||''),nic:String(req.query.nic||'').toUpperCase()},req.query.exclude));}));
+r.get('/',wrap(async(req,res)=>{const q=String(req.query.q||''),filter=q?{$or:[{name:new RegExp(esc(q),'i')},{phone:new RegExp(esc(q),'i')},{nic:new RegExp(esc(q),'i')}]}:{};res.json(await Customer.find(filter).sort({name:1}));}));
+r.get('/:id/history',wrap(async(req,res)=>{
+ const customer=await Customer.findById(req.params.id).lean();if(!customer)throw httpErr(404,'Customer not found');
+ const orders=await Order.find({customer:customer._id,deletedAt:null}).sort({createdAt:-1}).lean(),ids=orders.map(o=>o._id);
+ const items=await OrderItem.find({order:{$in:ids}}).populate('equipment','name').lean(),payments=await Payment.find({order:{$in:ids}}).sort({paidAt:-1}).lean();
+ const rentals=await Rental.find({customer:customer._id}).lean(),returns=await Return.find({rental:{$in:rentals.map(x=>x._id)}}).lean();
+ const rows=orders.map(o=>{const paid=payments.filter(p=>String(p.order)===String(o._id)).reduce((s,p)=>s+(p.type==='refund'?-p.amount:p.amount),0);return {...o,paid,balance:o.status==='cancelled'?0:Math.max(0,o.totalAmount-paid),items:items.filter(i=>String(i.order)===String(o._id))};});
+ res.json({customer,orders:rows,returns,payments:can(req.user,'finance.view')?payments:[],outstanding:rows.reduce((s,o)=>s+o.balance,0)});
 }));
-r.post('/', wrap(async (req, res) => {
-  const contact = customerContact(req.body);
-  const data = { ...pick(req.body), ...contact };
-  // WhatsApp pre-booking: only a phone number is needed; reuse the customer if that number already exists
-  if (req.body.preBooking) {
-    const phone = contact.phone;
-    if (!phone) throw httpErr(400, 'WhatsApp number is required');
-    const found = await Customer.findOne({ phone });
-    if (found) return res.json(found);
-    return res.status(201).json(await Customer.create({ ...data, phone, name: (req.body.name || '').trim() || 'WhatsApp ' + phone, detailsPending: true }));
-  }
-  const nic = contact.nic;
-  if (nic && await Customer.findOne({ nic: new RegExp('^' + esc(nic) + '$', 'i') })) throw httpErr(409, 'A customer with this NIC already exists');
-  res.status(201).json(await Customer.create(data));
+r.post('/',requirePermission('customers.write'),wrap(async(req,res)=>{
+ res.status(201).json(await mutate(req,'customer.create',async session=>{
+ const contact=customerContact(req.body),matches=await matchesContact(contact,null,session);
+ if(matches.some(c=>contact.nic&&c.nic?.toUpperCase()===contact.nic))throw httpErr(409,'This NIC belongs to an existing customer. Choose that customer.');
+ if(req.body.preBooking&&matches.length===1)return matches[0];
+ if(matches.length&&(!req.body.confirmDifferentPerson||!contact.nic))throw httpErr(409,'An existing customer uses this phone. Choose the existing record, or confirm a different person with a different NIC.');
+ const [customer]=await Customer.create([{...pick(req.body),...contact,phoneKey:phoneKey(contact.phone),name:typeof req.body.name==='string'&&req.body.name.trim()?req.body.name.trim():(req.body.preBooking?'WhatsApp '+contact.phone:''),detailsPending:!!req.body.preBooking}],{session});
+ await audit(session,req.user,'customer.created',customer._id,null,{name:customer.name,phone:customer.phone});return customer;
+ }));
 }));
-r.put('/:id', wrap(async (req, res) => {
-  const c = await Customer.findById(req.params.id);
-  if (!c) return res.status(404).json({ error: 'Not found' });
-  const contact = customerContact(req.body);
-  if (contact.nic && await Customer.findOne({ _id: { $ne: c._id }, nic: new RegExp('^' + esc(contact.nic) + '$', 'i') }))
-    throw httpErr(409, 'A customer with this NIC already exists');
-  c.set({ ...pick(req.body), ...contact });
-  if (c.detailsPending && c.nic && c.name && !/^WhatsApp /.test(c.name)) c.detailsPending = false;
-  res.json(await c.save());
+r.put('/:id',requirePermission('customers.write'),wrap(async(req,res)=>{
+ res.json(await mutate(req,'customer.edit:'+req.params.id,async session=>{
+ const customer=await Customer.findById(req.params.id).session(session);if(!customer)throw httpErr(404,'Customer not found');
+ const contact=customerContact(req.body),matches=await matchesContact(contact,customer._id,session);
+ if(matches.some(c=>contact.nic&&c.nic?.toUpperCase()===contact.nic))throw httpErr(409,'A customer with this NIC already exists');
+ const before=customer.toObject();customer.set({...pick(req.body),...contact,phoneKey:phoneKey(contact.phone)});
+ if(customer.detailsPending&&customer.nic&&customer.name&&!/^WhatsApp /.test(customer.name))customer.detailsPending=false;
+ await customer.save({session});await audit(session,req.user,'customer.edited',customer._id,before,customer);return customer;
+ }));
 }));
 export default r;

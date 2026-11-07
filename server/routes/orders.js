@@ -1,127 +1,78 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
-import { Order, OrderItem, Payment, Invoice } from '../models/index.js';
-import { availability, countPeriods, httpErr } from '../utils/availability.js';
+import { Order, OrderItem, Customer, Payment, Invoice } from '../models/index.js';
+import { httpErr } from '../utils/availability.js';
 import { nextDocumentNumber } from '../utils/documentNumbers.js';
 import { previewOrderDeletion, permanentlyDeleteOrder } from '../utils/orderDeletion.js';
-
-const r = Router();
-const wrap = fn => (req, res, next) => fn(req, res).catch(next);
-const ownerOnly = (req, res, next) => req.user?.role === 'owner' ? next() : next(httpErr(403, 'Only the owner can delete past orders'));
-const pastDeleteLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5,
-  keyGenerator: req => String(req.user._id), standardHeaders: 'draft-8', legacyHeaders: false,
-  message: { error: 'Too many past-order deletion attempts. Try again in 15 minutes.' } });
-
-// Runs order changes one at a time so two requests can't both take the last unit
-let chain = Promise.resolve();
-const serial = fn => { const run = chain.then(fn); chain = run.catch(() => {}); return run; };
-
-function parse(body) {
-  const s = new Date(body.startDate), e = new Date(body.endDate);
-  if (isNaN(s) || isNaN(e) || s >= e) throw httpErr(400, 'End time must be after start time');
-  const wanted = {};
-  (body.items || []).forEach(i => { if (i.equipment) wanted[i.equipment] = (wanted[i.equipment] || 0) + Number(i.quantity); });
-  if (!Object.keys(wanted).length) throw httpErr(400, 'Add at least one item');
-  return { s, e, wanted };
-}
-
-// Checks stock for the chosen times (ignoring `exclude`, the order being edited) and prices every line
-async function priceLines(wanted, s, e, exclude) {
-  const byId = Object.fromEntries((await availability(s, e, exclude)).map(a => [String(a._id), a]));
-  const periods = countPeriods(s, e);
-  let total = 0, deposit = 0;
-  const lines = Object.entries(wanted).map(([id, quantity]) => {
-    const a = byId[id];
-    if (!a) throw httpErr(400, 'Equipment not found');
-    if (!(quantity >= 1)) throw httpErr(400, 'Quantity must be at least 1');
-    if (quantity > a.available) throw httpErr(409, `Only ${a.available} of "${a.name}" available for those times`);
-    const lineTotal = quantity * a.periodRate * periods;
-    total += lineTotal; deposit += quantity * a.deposit;
-    return { equipment: id, quantity, periodRate: a.periodRate, periods, lineTotal };
-  });
-  return { lines, total, deposit, periods };
-}
-
-r.get('/', wrap(async (req, res) => {
-  const hidden = req.query.deleted === 'true';
-  if (hidden && req.user.role !== 'owner') throw httpErr(403, 'Owner only');
-  const filter = hidden ? { deletedAt: { $ne: null }, status: 'completed' } : { deletedAt: null };
-  const orders = await Order.find(filter).sort({ createdAt: -1 }).populate('customer', 'name phone nic address email detailsPending').lean();
-  const items = await OrderItem.find({ order: { $in: orders.map(o => o._id) } }).populate('equipment', 'name').lean();
-  res.json(orders.map(o => ({ ...o, items: items.filter(i => String(i.order) === String(o._id)) })));
+import { mutate, audit, money, methodOf } from '../utils/operations.js';
+import { requirePermission, assertPermission, can } from '../utils/permissions.js';
+import { priceItems, paidTotal, recordPayment, syncInvoice, depositHeld } from '../utils/finance.js';
+const r=Router(), wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
+const ownerOnly=(req,res,next)=>req.user?.role==='owner'?next():next(httpErr(403,'Only the owner can delete past orders'));
+const limit=rateLimit({windowMs:15*60*1000,limit:5,keyGenerator:req=>String(req.user._id),standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many deletion attempts. Try again in 15 minutes.'}});
+r.get('/',wrap(async(req,res)=>{
+  const hidden=req.query.deleted==='true';if(hidden&&req.user.role!=='owner')throw httpErr(403,'Owner only');
+  const orders=await Order.find(hidden?{deletedAt:{$ne:null},status:'completed'}:{deletedAt:null}).sort({createdAt:-1}).populate('customer','name phone nic address email detailsPending').lean();
+  const items=await OrderItem.find({order:{$in:orders.map(o=>o._id)}}).populate('equipment','name checklist').lean();
+  res.json(orders.map(o=>({...o,items:items.filter(i=>String(i.order)===String(o._id))})));
 }));
-
-r.post('/', wrap(async (req, res) => {
-  const { customer, notes } = req.body;
-  if (!customer) throw httpErr(400, 'Choose a customer');
-  const { s, e, wanted } = parse(req.body);
-  const order = await serial(async () => {
-    const { lines, total, deposit, periods } = await priceLines(wanted, s, e);
-    const orderNo = await nextDocumentNumber('order');
-    const o = await Order.create({ orderNo, customer, startDate: s, endDate: e,
-      periods, totalAmount: total, depositAmount: deposit, notes });
-    await OrderItem.insertMany(lines.map(l => ({ ...l, order: o._id })));
-    return o;
-  });
-  // Optional advance payment taken when the order is booked
-  const adv = Number(req.body.advance?.amount);
-  if (adv > 0) await Payment.create({ order: order._id, amount: adv, method: req.body.advance.method || 'cash', type: 'deposit' });
-  res.status(201).json(order);
+r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
+  const result=await mutate(req,'order.create',async session=>{
+    if(!await Customer.findById(req.body.customer).session(session))throw httpErr(400,'Choose an existing customer');
+    const p=await priceItems(req.body,session);
+    const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:req.body.customer,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:p.deposit,notes:req.body.notes}],{session});
+    await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
+    if(Number(req.body.advance?.amount)>0)await recordPayment(order,{...req.body.advance,type:'deposit'},req.user,session);
+    await audit(session,req.user,'order.created',order._id,null,order);return order;
+  });res.status(201).json(result);
 }));
-
-// Change the items and/or times of an order that has not been picked up yet
-r.put('/:id', wrap(async (req, res) => {
-  const o = await Order.findById(req.params.id);
-  if (!o) throw httpErr(404, 'Not found');
-  if (o.status !== 'reserved') throw httpErr(409, 'Only orders that have not been picked up can be changed');
-  const { s, e, wanted } = parse({ startDate: req.body.startDate || o.startDate, endDate: req.body.endDate || o.endDate, items: req.body.items });
-  await serial(async () => {
-    const { lines, total, deposit, periods } = await priceLines(wanted, s, e, o._id);
-    await OrderItem.deleteMany({ order: o._id });
-    await OrderItem.insertMany(lines.map(l => ({ ...l, order: o._id })));
-    await Order.updateOne({ _id: o._id }, { startDate: s, endDate: e, periods, totalAmount: total, depositAmount: deposit });
-    await Invoice.updateMany({ order: o._id, status: { $ne: 'void' } }, { status: 'void' });  // any old invoice no longer matches
-  });
-  res.json(await Order.findById(o._id));
+r.put('/:id',requirePermission('orders.write'),wrap(async(req,res)=>{
+  res.json(await mutate(req,'order.edit:'+req.params.id,async session=>{
+    const order=await Order.findById(req.params.id).session(session);
+    if(!order||order.deletedAt)throw httpErr(404,'Order not found');
+    if(order.status!=='reserved')throw httpErr(409,'Only uncollected bookings can be edited');
+    const before=order.toObject();const p=await priceItems({startDate:req.body.startDate||order.startDate,endDate:req.body.endDate||order.endDate,items:req.body.items},session,order._id);
+    await OrderItem.deleteMany({order:order._id},{session});await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
+    order.set({startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:p.deposit});await order.save({session});
+    await syncInvoice(order,session);await audit(session,req.user,'order.edited',order._id,before,order);return order;
+  }));
 }));
-
-r.patch('/:id/cancel', wrap(async (req, res) => {
-  const o = await Order.findById(req.params.id);
-  if (!o) throw httpErr(404, 'Not found');
-  if (o.status !== 'reserved') throw httpErr(409, 'Only reserved orders can be cancelled');
-  o.status = 'cancelled'; await o.save();
-  res.json(o);
+r.patch('/:id/cancel',requirePermission('orders.write'),wrap(async(req,res)=>{
+  res.json(await mutate(req,'order.cancel:'+req.params.id,async session=>{
+    const order=await Order.findById(req.params.id).session(session);
+    if(!order||order.deletedAt)throw httpErr(404,'Order not found');if(order.status!=='reserved')throw httpErr(409,'Only reserved bookings can be cancelled');
+    const before=order.toObject(),paid=await paidTotal(order._id,session),held=await depositHeld(order._id,session);
+    if(held>0)throw httpErr(409,'Refund or apply the held security deposit before cancelling');
+    const action=req.body.action||'pending';if(!['refund','keep','pending'].includes(action))throw httpErr(400,'Choose a cancellation payment action');
+    if(paid>0&&action==='refund')await recordPayment(order,{type:'refund',amount:paid,method:req.body.method,reason:req.body.reason||'Booking cancelled'},req.user,session);
+    if(paid>0&&action==='keep')assertPermission(req.user,'payments.refund');
+    order.status='cancelled';order.cancellation={action,reason:req.body.reason||'',refundPending:action==='pending'?paid:0};await order.save({session});
+    await Invoice.updateMany({order:order._id,status:{$ne:'void'}},{$set:{status:'void'}},{session});
+    await audit(session,req.user,'order.cancelled',order._id,before,order);return order;
+  }));
 }));
-
-// Owner-only removal of completed orders, with a separate server-side access key.
-r.get('/:id/past-delete-preview', ownerOnly, wrap(async (req, res) => {
-  res.json(await previewOrderDeletion(req.params.id));
+r.get('/:id/detail',wrap(async(req,res)=>{
+  const order=await Order.findById(req.params.id).populate('customer').lean();if(!order)throw httpErr(404,'Order not found');
+  const items=await OrderItem.find({order:order._id}).populate('equipment','name').lean();
+  const showPayments=['finance.view','payments.record','payments.refund'].some(p=>can(req.user,p));
+  res.json({...order,items,paid:await paidTotal(order._id),securityHeld:await depositHeld(order._id),payments:showPayments?await Payment.find({order:order._id}).sort({paidAt:-1}).lean():[],invoices:await Invoice.find({order:order._id}).lean()});
 }));
-
-r.delete('/:id/past', ownerOnly, pastDeleteLimit, wrap(async (req, res) => {
-  const expected = process.env.PAST_ORDER_DELETE_KEY;
-  if (!expected || expected.length < 12 || expected.length > 128)
-    throw httpErr(503, 'Set PAST_ORDER_DELETE_KEY to 12 to 128 characters in the server environment.');
-  const supplied = req.body?.accessKey;
-  const digest = value => crypto.createHash('sha256').update(value).digest();
-  if (typeof supplied !== 'string' || supplied.length > 128 || !crypto.timingSafeEqual(digest(supplied.trim()), digest(expected)))
-    throw httpErr(403, 'Incorrect delete access key');
-  const deleted = await permanentlyDeleteOrder(req.params.id, req.body.confirmation);
-  res.json({ ok: true, deleted });
+r.get('/:id/past-delete-preview',ownerOnly,wrap(async(req,res)=>res.json(await previewOrderDeletion(req.params.id))));
+r.delete('/:id/past',ownerOnly,limit,wrap(async(req,res)=>{
+  const expected=process.env.PAST_ORDER_DELETE_KEY,supplied=req.body?.accessKey;
+  if(!expected||expected.length<12||expected.length>128)throw httpErr(503,'Set PAST_ORDER_DELETE_KEY to 12 to 128 characters in the server environment.');
+  const digest=v=>crypto.createHash('sha256').update(v).digest();
+  if(typeof supplied!=='string'||supplied.length>128||!crypto.timingSafeEqual(digest(supplied.trim()),digest(expected)))throw httpErr(403,'Incorrect delete access key');
+  res.json({ok:true,deleted:await permanentlyDeleteOrder(req.params.id,req.body.confirmation,req.user)});
 }));
-
-// Hide abandoned bookings while retaining accounting history and order numbers.
-r.delete('/:id', wrap(async (req, res) => {
-  const o = await Order.findOneAndUpdate({ _id: req.params.id, deletedAt: null,
-    status: { $in: ['reserved', 'cancelled'] } }, {
-    $set: { status: 'cancelled', deletedAt: new Date(), deletedBy: req.user._id }
-  }, { new: true });
-  if (!o) {
-    const existing = await Order.findById(req.params.id);
-    if (!existing || existing.deletedAt) throw httpErr(404, 'Booking not found');
-    throw httpErr(409, 'Only bookings that have not been picked up can be deleted');
-  }
-  res.json({ ok: true });
+r.delete('/:id',requirePermission('orders.write'),wrap(async(req,res)=>{
+  res.json(await mutate(req,'order.hide:'+req.params.id,async session=>{
+    const order=await Order.findById(req.params.id).session(session);if(!order||order.deletedAt)throw httpErr(404,'Booking not found');
+    if(!['reserved','cancelled'].includes(order.status))throw httpErr(409,'Only uncollected bookings can be removed');
+    if(await paidTotal(order._id,session)>0||await depositHeld(order._id,session)>0)throw httpErr(409,'Resolve the advance/refund and security deposit before removing this booking');
+    order.status='cancelled';order.deletedAt=new Date();order.deletedBy=req.user._id;await order.save({session});
+    await audit(session,req.user,'order.hidden',order._id,null,{orderNo:order.orderNo});return {ok:true};
+  }));
 }));
 export default r;

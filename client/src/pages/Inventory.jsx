@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
+import {can} from '../permissions.js';
 
 const blank = { name: '', category: '', sku: '', totalQuantity: 1, periodRate: '', deposit: 0, damagedQty: 0, condition: 'good', notes: '' };
 const condLabel = { good: 'Good', fair: 'Fair', needs_repair: 'Needs repair' };
 
-export default function Inventory() {
+export default function Inventory({me}) {
   const [items, setItems] = useState([]);
   const [q, setQ] = useState('');
   const [cat, setCat] = useState('');
   const [form, setForm] = useState(null);
   const [err, setErr] = useState('');
+  const [archived,setArchived]=useState(false);
 
   const load = useCallback(() => {
-    const p = new URLSearchParams({ q, category: cat });
+    const p = new URLSearchParams({ q, category: cat,archived:String(archived) });
     api('/equipment?' + p).then(setItems).catch(e => setErr(e.message));
-  }, [q, cat]);
+  }, [q, cat,archived]);
   useEffect(load, [load]);
 
   const categories = [...new Set(items.map(i => i.category))];
@@ -40,7 +42,8 @@ export default function Inventory() {
           <option value="">All categories</option>
           {categories.map(c => <option key={c}>{c}</option>)}
         </select>
-        <button className="btn" onClick={() => { setErr(''); setForm(blank); }}>Add equipment</button>
+        <label className="check"><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>Archived items</label>
+        {can(me,'inventory.manage')&&<button className="btn" onClick={() => { setErr(''); setForm({...blank,requestId:crypto.randomUUID()}); }}>Add equipment</button>}
       </div>
       {err && !form && <p className="bad">{err}</p>}
       {items.length === 0 ? (
@@ -57,8 +60,8 @@ export default function Inventory() {
               <td data-l="Deposit">{lkr(i.deposit)}</td>
               <td data-l="Condition"><span className={'tag ' + i.condition}>{condLabel[i.condition]}</span></td>
               <td className="acts">
-                <button onClick={() => { setErr(''); setForm(i); }}>Edit</button>
-                <button onClick={() => archive(i)}>Archive</button>
+                {can(me,'inventory.manage')&&<><button onClick={() => { setErr(''); setForm({...i,requestId:crypto.randomUUID()}); }}>Edit</button>
+                {archived?<button onClick={()=>api(`/equipment/${i._id}/restore`,{method:'POST',body:{requestId:crypto.randomUUID()}}).then(load).catch(e=>setErr(e.message))}>Restore item</button>:<button onClick={() => archive(i)}>Archive</button>}</>}
               </td>
             </tr>))}</tbody>
         </table></div>
@@ -81,6 +84,7 @@ export default function Inventory() {
               <label>Deposit (LKR)<input type="number" min="0" value={form.deposit} onChange={set('deposit')} /></label>
             </div>
             <label>Damaged / in repair (units)<input type="number" min="0" value={form.damagedQty || 0} onChange={set('damagedQty')} /></label>
+            <label>Pickup / return checklist (one part per line)<textarea rows="3" placeholder={'Poles\nPegs\nCarry bag'} value={(form.checklist||[]).join('\n')} onChange={e=>setForm({...form,checklist:e.target.value.split('\n')})}/></label>
             <label>Notes<textarea rows="2" value={form.notes || ''} onChange={set('notes')} /></label>
             {err && <p className="bad">{err}</p>}
             <div className="row end"><button type="button" onClick={() => setForm(null)}>Cancel</button><button className="btn">Save</button></div>

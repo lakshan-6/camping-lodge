@@ -1,0 +1,13 @@
+import express,{Router} from 'express';
+import {rateLimit} from 'express-rate-limit';
+import { Backup } from '../models/index.js';
+import { httpErr } from '../utils/availability.js';
+import { createBackup,backupEnvelope,restoreBackup } from '../utils/backups.js';
+const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
+r.use((req,res,next)=>req.user.role==='owner'?next():next(httpErr(403,'Owner only')));
+r.use(express.json({limit:'16mb'}));
+r.get('/',wrap(async(req,res)=>res.json({configured:!!process.env.BACKUP_ENCRYPTION_KEY,history:await Backup.find().select('-payload -iv -tag').sort({createdAt:-1}).lean()})));
+r.post('/',wrap(async(req,res)=>{const row=await createBackup();res.status(201).json({_id:row._id,day:row.day,size:row.size,createdAt:row.createdAt});}));
+r.get('/:id/download',wrap(async(req,res)=>{const row=await Backup.findById(req.params.id);if(!row)throw httpErr(404,'Backup not found');res.type('application/json').set('Cache-Control','no-store').set('Content-Disposition',`attachment; filename="camping-lodge-${row.day}.encrypted.json"`).json(backupEnvelope(row));}));
+r.post('/restore',rateLimit({windowMs:15*60*1000,limit:5,keyGenerator:req=>String(req.user._id),standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many restore attempts. Try again in 15 minutes.'}}),wrap(async(req,res)=>res.json(await restoreBackup(req.body.backup,req.body.confirmation,req.body.accessKey,req.user))));
+export default r;
