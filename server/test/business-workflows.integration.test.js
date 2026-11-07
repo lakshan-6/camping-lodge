@@ -84,8 +84,9 @@ test('business workflows against an isolated real MongoDB replica set',{skip:!pr
  });
  await t.test('repair completion is idempotent, releases stock and records its expense once',async()=>{
   const repair=await ok('/equipment/repairs','POST',{equipment:equipment._id,quantity:1,notes:'Repair poles',requestId:crypto.randomUUID()});
-  const body={cost:150,requestId:crypto.randomUUID()};await ok(`/equipment/repairs/${repair._id}/complete`,'POST',body);await ok(`/equipment/repairs/${repair._id}/complete`,'POST',body);
+  const body={cost:150,method:'bank_transfer',requestId:crypto.randomUUID()};await ok(`/equipment/repairs/${repair._id}/complete`,'POST',body);await ok(`/equipment/repairs/${repair._id}/complete`,'POST',body);
   assert.equal((await M.Equipment.findById(equipment._id)).damagedQty,0);assert.equal(await M.Expense.countDocuments({repair:repair._id}),1);
+  assert.equal((await M.Expense.findOne({repair:repair._id})).method,'bank_transfer');
  });
  await t.test('cancellation with an advance stays visible for refunds until resolved',async()=>{
   const booking=await ok('/orders','POST',{customer:customer._id,...dates(),items:[{equipment:equipment._id,quantity:1}],advance:{amount:500},requestId:crypto.randomUUID()});

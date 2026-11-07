@@ -38,6 +38,7 @@ r.patch('/:id', wrap(async (req, res) => {
   if (req.body.active === false && self) throw httpErr(400, "You can't disable your own account");
   if (typeof req.body.active === 'boolean' && !self) u.active = req.body.active;
   if (req.body.password) {
+    if(u.role==='owner')throw httpErr(403,'Change the owner password through Account Security');
     validatePassword(req.body.password);
     u.passwordHash = await hashPassword(req.body.password);
   }

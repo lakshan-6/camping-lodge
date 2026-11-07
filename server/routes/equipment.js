@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { Equipment,InventoryTransaction,Repair,Expense,Order,OrderItem } from '../models/index.js';
 import { httpErr } from '../utils/availability.js';
-import { mutate,audit,money,units } from '../utils/operations.js';
+import { mutate,audit,money,units,methodOf } from '../utils/operations.js';
 import { requirePermission, assertPermission } from '../utils/permissions.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const esc=s=>String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
@@ -38,6 +38,6 @@ r.post('/repairs',requirePermission('inventory.manage'),wrap(async(req,res)=>res
 r.post('/repairs/:id/complete',requirePermission('inventory.manage'),wrap(async(req,res)=>res.json(await mutate(req,'repair.complete:'+req.params.id,async session=>{
  const repair=await Repair.findById(req.params.id).session(session);if(!repair||repair.status!=='open')throw httpErr(409,'Repair is already completed or missing');const item=await Equipment.findById(repair.equipment).session(session);
  if(!item||item.damagedQty<repair.quantity)throw httpErr(409,'Damaged stock is inconsistent');item.damagedQty-=repair.quantity;item.revision++;if(!item.damagedQty)item.condition='good';await item.save({session});repair.status='completed';repair.completedAt=new Date();repair.cost=money(req.body.cost||0,'Repair cost',true);await repair.save({session});
- await InventoryTransaction.create([{equipment:item._id,type:'repaired',quantity:repair.quantity,reference:String(repair._id)}],{session});if(repair.cost){assertPermission(req.user,'expenses.manage');await Expense.create([{amount:repair.cost,category:'Repairs',description:'Repair: '+item.name,spentAt:new Date(),method:'other',repair:repair._id,actor:req.user._id}],{session});}await audit(session,req.user,'repair.completed',repair._id,null,repair);return repair;
+ await InventoryTransaction.create([{equipment:item._id,type:'repaired',quantity:repair.quantity,reference:String(repair._id)}],{session});if(repair.cost){assertPermission(req.user,'expenses.manage');await Expense.create([{amount:repair.cost,category:'Repairs',description:'Repair: '+item.name,spentAt:new Date(),method:methodOf(req.body.method||'other'),repair:repair._id,actor:req.user._id}],{session});}await audit(session,req.user,'repair.completed',repair._id,null,repair);return repair;
 }))));
 export default r;

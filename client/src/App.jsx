@@ -9,25 +9,27 @@ import Availability from './pages/Availability.jsx';
 import Orders from './pages/Orders.jsx';
 import Rentals from './pages/Rentals.jsx';
 import Returns from './pages/Returns.jsx';
-import Payments from './pages/Payments.jsx';
-import Billing from './pages/Billing.jsx';
+import Money from './pages/Money.jsx';
 import Calendar from './pages/Calendar.jsx';
 import Reports from './pages/Reports.jsx';
 import Settings from './pages/Settings.jsx';
 import Staff from './pages/Staff.jsx';
 import Today from './pages/Today.jsx';
 import Repairs from './pages/Repairs.jsx';
-import {Expenses,Activity,Backups} from './pages/Management.jsx';
+import {Expenses,Activity} from './pages/Management.jsx';
+import Backups from './pages/Backups.jsx';
 import {can} from './permissions.js';
+import {StockCounts} from './pages/Reconciliation.jsx';
+import AccountSecurity from './pages/AccountSecurity.jsx';
 
 const nav = [
-  ['/', 'Dashboard'], ['/inventory', 'Inventory'], ['/availability', 'Check Availability'],
+  ['/', 'Today’s work'], ['/dashboard', 'Business overview'], ['/inventory', 'Inventory'], ['/stock-counts','Stock count'], ['/availability', 'Check Availability'],
   ['/orders', 'Orders'], ['/rentals', 'Rentals'], ['/returns', 'Returns'], ['/customers', 'Customers'],
-  ['/calendar', 'Calendar'], ['/billing', 'Billing'], ['/payments', 'Payments'],
+  ['/calendar', 'Calendar'], ['/money', 'Money / මුදල්'],
   ['/reports', 'Reports'], ['/settings', 'Settings'], ['/staff', 'Staff Access'],
-  ['/today','Today’s work'], ['/repairs','Repairs'], ['/expenses','Expenses'], ['/activity','Activity history'], ['/backups','Backups'],
+  ['/repairs','Repairs'], ['/expenses','Expenses'], ['/activity','Activity history'], ['/backups','Backups'], ['/security','Account security'],
 ];
-const adminOnly = ['/reports', '/settings', '/staff'];
+const adminOnly = ['/dashboard','/reports', '/settings', '/staff'];
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -53,13 +55,13 @@ export default function App() {
   if (!ready) return null;
   if (!user) return <Login onLogin={setUser} />;
   const admin = ['owner', 'admin'].includes(user.role);
-  const pages = { '/': <Dashboard me={user}/>, '/inventory': <Inventory me={user}/>, '/availability': <Availability />, '/orders': <Orders me={user} />,
+  const pages = { '/': <Today/>, '/dashboard': <Dashboard me={user}/>, '/inventory': <Inventory me={user}/>, '/stock-counts':<StockCounts/>, '/availability': <Availability />, '/orders': <Orders me={user} />,
     '/rentals': <Rentals me={user}/>, '/returns': <Returns me={user}/>, '/customers': <Customers me={user}/>, '/calendar': <Calendar />,
-    '/billing': <Billing me={user}/>, '/payments': <Payments me={user}/>, '/reports': <Reports />, '/settings': <Settings onSaved={setSt} />, '/staff': <Staff me={user} />,
-    '/today':<Today/>, '/repairs':<Repairs me={user}/>, '/expenses':<Expenses/>, '/activity':<Activity/>, '/backups':<Backups/> };
+    '/money': <Money me={user}/>, '/reports': <Reports />, '/settings': <Settings onSaved={setSt} />, '/staff': <Staff me={user} />,
+    '/repairs':<Repairs me={user}/>, '/expenses':<Expenses/>, '/activity':<Activity/>, '/backups':<Backups/>, '/security':<AccountSecurity/> };
   const items = nav.filter(([to]) => {
-    if(['/activity','/backups'].includes(to))return user.role==='owner';
-    if(to==='/repairs')return can(user,'inventory.manage');
+    if(['/activity','/backups','/security'].includes(to))return user.role==='owner';
+    if(['/repairs','/stock-counts'].includes(to))return can(user,'inventory.manage');
     if(to==='/expenses')return can(user,'expenses.manage');
     if(to==='/reports')return can(user,'reports.view');
     if(to==='/payments')return can(user,'finance.view')||can(user,'payments.record')||can(user,'payments.refund');
@@ -86,6 +88,9 @@ export default function App() {
         </header>
         <main className="page">
           <Routes>
+            <Route path="/today" element={<Navigate to="/" replace/>}/>
+            <Route path="/billing" element={<Navigate to="/money" replace/>}/>
+            <Route path="/payments" element={<Navigate to="/money?view=payments" replace/>}/>
             {items.map(([to]) => <Route key={to} path={to} element={pages[to]} />)}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

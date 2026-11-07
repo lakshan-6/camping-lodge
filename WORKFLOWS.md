@@ -31,3 +31,27 @@ Record operating expenses and use Reports to compare receipts less refunds again
 The owner assigns staff permissions in Staff Access. Owner/admin access includes all business permissions; ordinary staff start with customer, booking, pickup and return access. Financial dashboard totals are hidden unless finance/report permission is granted. Operational order totals remain visible where necessary for handover and return work. Activity history is owner-only and records key business actions and account changes without passwords or private keys.
 
 Use the owner-only Backups screen to create/download encrypted copies. Automatic daily snapshots run only while the server is awake and retain the latest seven inside the database. Store downloaded copies separately and retain the exact backup encryption key privately. See DEPLOYMENT.md before restoring or rotating any key.
+
+## Search and simpler screens
+
+The home screen is now Today's work. Owner/admin accounts can open Business overview separately. Money combines Invoices, Payments/deposits and Daily cash close. Existing `/billing`, `/payments` and `/today` links redirect to the new screens.
+
+Orders supports literal search by order number/customer/phone/NIC, status and pickup-date range in Sri Lanka time. Results show 25, 50 or 100 per page. Cancel booking, Hide from list and Delete permanently are separate actions. WhatsApp pre-bookings initially ask only for the phone; expand Add customer details now to enter full details immediately, or collect them at pickup.
+
+## Cash close and physical stock counts
+
+Open Money > Daily cash close, select the business date and review rental receipts/refunds, actual cash security-deposit collections/refunds and cash expenses. Non-cash entries and deposit applications are excluded. Enter opening cash, any cash taken out/banked, and the cash counted **after taking that money out**. A difference needs a reason. The previous closing count is only a suggested opening balance; verify it. Users with Close the daily cash drawer permission can submit the first close. Only the owner can correct it; all revisions remain in history. Later payment/expense edits or permanent order deletion flag a changed ledger instead of silently rewriting a prior close.
+
+Stock count counts good units physically in the store and all damaged units, including units in repair. Units still with customers are added automatically to the physical total. Differences need an explanation and create an inventory adjustment and audit entry. Counts cannot remove units needed by bookings or open repair jobs. Refresh if stock/bookings changed while counting. Recent counts retain before/after quantities and the actor.
+
+## Owner account security
+
+Open Account security. Generate account recovery codes **before** you forget the password, and store them privately offline. Each code works once; creating a new set invalidates the previous set. Staff password recovery still goes through the owner/admin.
+
+To enable 2FA, confirm your current password, enter the displayed setup key in an authenticator app as time based (six digits, 30 seconds), then enter a valid code. Setup expires after ten minutes. Enabling is optional and occurs only after confirmation. Save the separate authenticator recovery codes displayed once. Current password plus an authenticator/recovery code is needed to disable 2FA, change the owner password or replace recovery codes. Credential changes revoke other sessions. A code just used cannot be reused; wait for the next code or use an unused recovery code.
+
+Forgot owner password uses an **account recovery code**. When 2FA is enabled, it additionally requires the current authenticator code or an unused **authenticator recovery code**. Recovery changes the password, consumes the code(s), revokes sessions and returns to login; it never signs you in automatically or silently disables 2FA. If you lose every recovery method, there is no public setup-key bypass. Keep the original backup encryption key, as it also protects authenticator secrets.
+
+## External backup connection
+
+See [EXTERNAL_BACKUPS.md](EXTERNAL_BACKUPS.md) for private bucket setup, retention, free-allowance limits and a recovery drill. This update prepares the integration without creating an account or uploading production data to a new provider. Once configured, backups upload encrypted files and read them back to verify integrity. A local-only or failed status means the external copy is not verified. Check file without restoring performs a non-destructive validation; actual restore still needs the owner delete key and exact confirmation.

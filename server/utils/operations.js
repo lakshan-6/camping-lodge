@@ -14,7 +14,7 @@ export async function transaction(fn) {
   finally { await session.endSession(); }
 }
 export async function audit(session, user, action, target, before, after) {
-  const clean = value => value == null ? undefined : JSON.parse(JSON.stringify(value, (key, data) => /password|secret|accesskey|token/i.test(key) ? undefined : data));
+  const clean = value => value == null ? undefined : JSON.parse(JSON.stringify(value, (key, data) => /password|secret|accesskey|token|mfa|recovery|codes/i.test(key) ? undefined : data));
   await AuditEvent.create([{ actor: user?._id, actorName: user?.name, action, target: String(target), before: clean(before), after: clean(after) }], { session });
 }
 export async function mutate(req, scope, fn) {

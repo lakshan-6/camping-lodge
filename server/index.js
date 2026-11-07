@@ -23,6 +23,8 @@ import management from './routes/management.js';
 import backups from './routes/backups.js';
 import { startBackupSchedule } from './utils/backups.js';
 import { requirePermission } from './utils/permissions.js';
+import reconciliation from './routes/reconciliation.js';
+import security from './routes/security.js';
 
 validateAuthConfig();
 const app = express();
@@ -53,6 +55,8 @@ app.use('/api/settings', settings);
 app.use('/api/users', requireAdmin, users);
 app.use('/api/reports', requirePermission('reports.view'), reports);
 app.use('/api/manage', management);
+app.use('/api/reconciliation', reconciliation);
+app.use('/api/security', security);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 if (process.env.NODE_ENV === 'production') serveClient(app);
 

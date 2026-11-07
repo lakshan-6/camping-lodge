@@ -8,14 +8,24 @@ import { previewOrderDeletion, permanentlyDeleteOrder } from '../utils/orderDele
 import { mutate, audit, money, methodOf } from '../utils/operations.js';
 import { requirePermission, assertPermission, can } from '../utils/permissions.js';
 import { priceItems, paidTotal, recordPayment, syncInvoice, depositHeld } from '../utils/finance.js';
+import {dayRange} from '../utils/businessTime.js';
 const r=Router(), wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const ownerOnly=(req,res,next)=>req.user?.role==='owner'?next():next(httpErr(403,'Only the owner can delete past orders'));
 const limit=rateLimit({windowMs:15*60*1000,limit:5,keyGenerator:req=>String(req.user._id),standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many deletion attempts. Try again in 15 minutes.'}});
 r.get('/',wrap(async(req,res)=>{
   const hidden=req.query.deleted==='true';if(hidden&&req.user.role!=='owner')throw httpErr(403,'Owner only');
-  const orders=await Order.find(hidden?{deletedAt:{$ne:null},status:'completed'}:{deletedAt:null}).sort({createdAt:-1}).populate('customer','name phone nic address email detailsPending').lean();
+  const filter=hidden?{deletedAt:{$ne:null},status:'completed'}:{deletedAt:null};
+  const status=req.query.status;if(status){if(!['reserved','active','completed','cancelled'].includes(status))throw httpErr(400,'Choose a valid status');if(hidden&&status!=='completed')throw httpErr(400,'Hidden past orders are completed orders');filter.status=status;}
+  if(req.query.from||req.query.to)filter.startDate=dayRange(req.query.from||req.query.to,req.query.to||req.query.from);
+  const term=String(req.query.q||'').trim();if(term.length>80)throw httpErr(400,'Search must be 80 characters or fewer');
+  if(term){const regex=new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i');const customers=await Customer.find({$or:[{name:regex},{phone:regex},{nic:regex}]}).select('_id').lean();filter.$or=[{orderNo:regex},{customer:{$in:customers.map(c=>c._id)}}];}
+  const paged=req.query.paged==='true',page=Number(req.query.page||1),pageSize=Number(req.query.pageSize||25);
+  if(paged&&(!Number.isSafeInteger(page)||page<1||page>1000000||!Number.isSafeInteger(pageSize)||pageSize<1||pageSize>100))throw httpErr(400,'Choose a valid page');
+  let query=Order.find(filter).sort({createdAt:-1,_id:-1});if(paged)query=query.skip((page-1)*pageSize).limit(pageSize);
+  const orders=await query.populate('customer','name phone nic address email detailsPending').lean();
   const items=await OrderItem.find({order:{$in:orders.map(o=>o._id)}}).populate('equipment','name checklist').lean();
-  res.json(orders.map(o=>({...o,items:items.filter(i=>String(i.order)===String(o._id))})));
+  const rows=orders.map(o=>({...o,items:items.filter(i=>String(i.order)===String(o._id))}));
+  res.json(paged?{rows,total:await Order.countDocuments(filter),page,pageSize}:rows);
 }));
 r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
   const result=await mutate(req,'order.create',async session=>{

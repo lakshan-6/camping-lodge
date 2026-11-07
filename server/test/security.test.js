@@ -87,11 +87,13 @@ test('authentication security regression checks (isolated model doubles)', async
     assert.equal((await request('/auth/login', { username: account.username, password: setup.password })).status, 200);
   });
   await t.test('password reset through account API revokes existing tokens', async () => {
+    account.role='admin'; // Owner password changes now require Account Security re-authentication.
     const token = sign(account);
     const response = await request('/users/' + account._id, { password: 'new-password-for-testing' }, token, 'PATCH');
     assert.equal(response.status, 200);
     assert.equal((await request('/auth/me', undefined, token, 'GET')).status, 401);
     assert.equal(await checkPassword('new-password-for-testing', account.passwordHash), true);
+    account.role='owner';
   });
   await t.test('disable/re-enable does not restore old sessions', async () => {
     const token = sign(account);

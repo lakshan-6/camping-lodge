@@ -122,6 +122,13 @@ export const User = model('User', new Schema({
   role: { type: String, enum: ['owner', 'admin', 'staff'], default: 'staff' },
   lastSeenAt: Date,
   active: { type: Boolean, default: true },
+  mfaEnabled: { type: Boolean, default: false },
+  mfaSecret: { type: String, select: false },
+  mfaPendingSecret: { type: String, select: false },
+  mfaPendingUntil: { type: Date, select: false },
+  mfaLastStep: { type: Number, default: -1, select: false },
+  mfaRecoveryHashes: { type: [String], select: false, default: [] },
+  accountRecoveryHashes: { type: [String], select: false, default: [] },
 }, opts));
 
 export const Settings = model('Settings', new Schema({
@@ -152,4 +159,17 @@ export const Expense = model('Expense', new Schema({
 }, opts));
 export const Backup = model('Backup', new Schema({
   day: { type: String, unique: true }, payload: Buffer, iv: Buffer, tag: Buffer, size: Number,
+  externalKey: String, externalVerifiedAt: Date, externalError: String,
+}, opts));
+
+const cashCloseSchema = new Schema({
+  day: { type: String, required: true }, revision: { type: Number, required: true },
+  openingCash: Number, cashRemoved: Number, countedCash: Number, expectedCash: Number, difference: Number,
+  summary: Schema.Types.Mixed, ledgerHash: String, reason: String, actor: ref('User'), actorName: String,
+}, opts);
+cashCloseSchema.index({day:1,revision:1},{unique:true});
+export const CashClose = model('CashClose', cashCloseSchema);
+export const StockCount = model('StockCount', new Schema({
+  equipment: ref('Equipment',{required:true}), equipmentName: String, countedGood: Number, countedDamaged: Number,
+  outQuantity: Number, before: Schema.Types.Mixed, after: Schema.Types.Mixed, reason: String, actor: ref('User'), actorName: String,
 }, opts));

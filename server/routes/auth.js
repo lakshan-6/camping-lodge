@@ -5,6 +5,8 @@ import { User } from '../models/index.js';
 import { hashPassword, checkPassword, sign, requireAuth } from '../utils/auth.js';
 import { httpErr } from '../utils/availability.js';
 import { permissionsOf } from '../utils/permissions.js';
+import {exclusive,transaction,audit} from '../utils/operations.js';
+import {verifyFactor,consumeCode,securityFields} from '../utils/mfa.js';
 
 const r = Router();
 const wrap = fn => (req, res, next) => fn(req, res).catch(next);
@@ -49,7 +51,27 @@ r.post('/login', limit, globalLimit, wrap(async (req, res) => {
   const u = await User.findOne({ username: username.toLowerCase().trim() });
   const valid = await checkPassword(password, u?.passwordHash || dummyHash);
   if (!u || !u.active || !valid) throw httpErr(401, 'Wrong username or password');
-  res.json({ token: sign(u), user: pub(u) });
+  if(u.mfaEnabled){
+    if(!req.body.code)return res.json({mfaRequired:true});
+    const verified=await exclusive(()=>transaction(async session=>{
+      const fresh=await User.findById(u._id).select(securityFields).session(session);
+      if(!fresh?.active||fresh.passwordHash!==u.passwordHash||fresh.sessionVersion!==u.sessionVersion)throw httpErr(401,'Please log in again');
+      verifyFactor(fresh,req.body.code);await fresh.save({session});return fresh;
+    }));return res.set('Cache-Control','no-store').json({token:sign(verified),user:pub(verified)});
+  }
+  res.set('Cache-Control','no-store').json({ token: sign(u), user: pub(u) });
+}));
+const recoveryLimit=rateLimit({windowMs:15*60*1000,limit:5,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many recovery attempts. Try again in 15 minutes.'}});
+r.post('/recover',recoveryLimit,globalLimit,wrap(async(req,res)=>{
+  const {username,newPassword,recoveryCode,code}=req.body;
+  if(typeof username!=='string'||username.length>64||typeof recoveryCode!=='string'||recoveryCode.length>100)throw httpErr(401,'Account recovery could not be verified');
+  const passwordHash=await hashPassword(newPassword);
+  await exclusive(()=>transaction(async session=>{
+    const u=await User.findOne({username:username.toLowerCase().trim(),role:'owner',active:true}).select(securityFields).session(session);
+    if(!u||!consumeCode(u,'accountRecoveryHashes',recoveryCode))throw httpErr(401,'Account recovery could not be verified');
+    verifyFactor(u,code);u.passwordHash=passwordHash;u.sessionVersion++;await u.save({session});
+    await audit(session,u,'security.account_recovered',u._id,null,{sessionsRevoked:true});
+  }));res.set('Cache-Control','no-store').json({ok:true});
 }));
 r.post('/logout', requireAuth, wrap(async (req, res) => {
   await User.updateOne({ _id: req.user._id }, { $inc: { sessionVersion: 1 }, $set: { lastSeenAt: new Date(0) } });

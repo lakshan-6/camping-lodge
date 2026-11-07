@@ -5,6 +5,7 @@ import {hashPassword,requireAuth} from '../utils/auth.js';
 import {initializeDocumentNumbers} from '../utils/documentNumbers.js';
 import {serveClient} from '../utils/production.js';
 import auth from '../routes/auth.js';import customers from '../routes/customers.js';import equipment from '../routes/equipment.js';import orders from '../routes/orders.js';import rentals from '../routes/rentals.js';import returns from '../routes/returns.js';import payments from '../routes/payments.js';import invoices from '../routes/invoices.js';import stats from '../routes/stats.js';import reports from '../routes/reports.js';import users from '../routes/users.js';import settings from '../routes/settings.js';import manage from '../routes/management.js';import backups from '../routes/backups.js';
+import reconciliation from '../routes/reconciliation.js';import security from '../routes/security.js';
 if(!process.env.TEST_MONGOD_PATH)throw new Error('TEST_MONGOD_PATH is required; this script only uses a temporary test database');
 process.env.AUTH_SECRET='smoke-auth-key-for-disposable-test-only-123456789';process.env.BACKUP_ENCRYPTION_KEY='smoke-backup-key-for-disposable-test-only-123456';
 const cleanup=await testDatabase();
@@ -14,7 +15,7 @@ const item=await Equipment.create({name:'Smoke Tent',category:'Tents',totalQuant
 const order=await Order.create({orderNo:'CL-0001',customer:customer._id,status:'reserved',startDate:new Date(),endDate:new Date(Date.now()+36*3600000),periods:1,totalAmount:2000,depositAmount:1000});
 await OrderItem.create({order:order._id,equipment:item._id,quantity:2,periodRate:1000,periods:1,lineTotal:2000});await Settings.create({});await initializeDocumentNumbers();
 const app=express();app.use(express.json({limit:'16mb'}));app.use('/api/auth',auth);app.use('/api',requireAuth);
-for(const [path,router]of Object.entries({customers,equipment,orders,rentals,returns,payments,invoices,stats,reports,users,settings,manage,backups}))app.use('/api/'+path,router);
+for(const [path,router]of Object.entries({customers,equipment,orders,rentals,returns,payments,invoices,stats,reports,users,settings,manage,backups,reconciliation,security}))app.use('/api/'+path,router);
 app.use('/api',(req,res)=>res.status(404).json({error:'Not found'}));serveClient(app);app.use((e,req,res,next)=>res.status(e.status||500).json({error:e.message}));
 const server=app.listen(5099,'127.0.0.1',()=>console.log('Disposable UI test app: http://127.0.0.1:5099'));
 let stopping=false;

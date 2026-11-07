@@ -1,34 +1,12 @@
-import { useEffect, useState } from 'react';
-import { api, setToken } from '../api.js';
-
-export default function Login({ onLogin }) {
-  const [hasUsers, setHasUsers] = useState(null);
-  const [f, setF] = useState({ name: '', username: '', password: '', setupKey: '' });
-  const [err, setErr] = useState('');
-  useEffect(() => { api('/auth/status').then(d => setHasUsers(d.hasUsers)).catch(e => setErr(e.message)); }, []);
-  const set = k => e => setF({ ...f, [k]: e.target.value });
-
-  async function submit(e) {
-    e.preventDefault(); setErr('');
-    try {
-      const d = await api(hasUsers ? '/auth/login' : '/auth/setup', { method: 'POST', body: f });
-      setToken(d.token); onLogin(d.user);
-    } catch (x) { setErr(x.message); }
-  }
-  if (hasUsers === null) return <div className="login"><p>{err || 'Loading…'}</p></div>;
-  return (
-    <div className="login">
-      <form onSubmit={submit}>
-        <img src="/logo.png" alt="Camping Lodge" className="login-logo" />
-        <h2>{hasUsers ? 'Log in' : 'Create the owner account'}</h2>
-        {!hasUsers && <p>First time setup. This account can add staff later.</p>}
-        {!hasUsers && <label>Your name<input required value={f.name} onChange={set('name')} /></label>}
-        {!hasUsers && <label>Setup key<input required type="password" value={f.setupKey} onChange={set('setupKey')} /><small>Use SETUP_KEY from server/.env.</small></label>}
-        <label>Username<input required autoFocus value={f.username} onChange={set('username')} /></label>
-        <label>Password{!hasUsers && ' (12–128 characters)'}<input required type="password" value={f.password} onChange={set('password')} /></label>
-        {err && <p className="bad">{err}</p>}
-        <button className="btn">{hasUsers ? 'Log in' : 'Create account'}</button>
-      </form>
-    </div>
-  );
+import {useEffect,useState} from 'react';
+import {api,setToken} from '../api.js';
+export default function Login({onLogin}){
+ const [hasUsers,setHasUsers]=useState(null),[form,setForm]=useState({name:'',username:'',password:'',setupKey:'',code:'',recoveryCode:'',newPassword:''}),[error,setError]=useState(''),[mode,setMode]=useState('login'),[mfa,setMfa]=useState(false),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
+ useEffect(()=>{api('/auth/status').then(d=>setHasUsers(d.hasUsers)).catch(e=>setError(e.message));},[]);const set=key=>e=>setForm({...form,[key]:e.target.value});
+ function switchMode(next){setMode(next);setForm({...form,password:'',code:'',recoveryCode:'',newPassword:''});setMfa(false);setError('');setMessage('');}
+ async function submit(e){e.preventDefault();if(busy)return;setBusy(true);setError('');try{if(mode==='recover'){await api('/auth/recover',{method:'POST',body:form});switchMode('login');setMessage('Password reset. Log in with your new password.');return;}const data=await api(hasUsers?'/auth/login':'/auth/setup',{method:'POST',body:form});if(data.mfaRequired){setMfa(true);return;}setToken(data.token);setForm({...form,password:'',code:''});onLogin(data.user);}catch(e){setError(e.message);}finally{setBusy(false);}}
+ if(hasUsers===null)return <div className="login"><p>{error||'Loading…'}</p></div>;
+ return <div className="login"><form onSubmit={submit}><img src="/logo.png" alt="Camping Lodge" className="login-logo"/><h2>{mode==='recover'?'Recover owner account':hasUsers?'Log in':'Create the owner account'}</h2>{!hasUsers&&<><p>First time setup. This account can add staff later.</p><label>Your name<input required value={form.name} onChange={set('name')}/></label><label>Setup key<input required type="password" value={form.setupKey} onChange={set('setupKey')}/><small>Use the private setup key from your hosting settings.</small></label></>}
+ <label>Username<input required autoComplete="username" value={form.username} onChange={set('username')}/></label>{mode==='recover'?<><p>Use an account recovery code saved earlier. If an authenticator is enabled, also supply its current code or a separate authenticator recovery code. Staff should contact their owner/admin.</p><label>Account recovery code<input required autoComplete="off" value={form.recoveryCode} onChange={set('recoveryCode')}/></label><label>Authenticator / authenticator recovery code (if enabled)<input autoComplete="off" value={form.code} onChange={set('code')}/></label><label>New password (12–128 characters)<input required type="password" autoComplete="new-password" minLength={12} maxLength={128} value={form.newPassword} onChange={set('newPassword')}/></label></>:<><label>Password{!hasUsers&&' (12–128 characters)'}<input required type="password" autoComplete={hasUsers?'current-password':'new-password'} value={form.password} onChange={set('password')}/></label>{mfa&&<label>Authenticator code or unused authenticator recovery code<input required autoFocus autoComplete="off" value={form.code} onChange={set('code')}/><small>Wait for the next code if this one was just used.</small></label>}</>}
+ {error&&<p className="bad" role="alert">{error}</p>}{message&&<p className="notice">{message}</p>}<button className="btn" disabled={busy}>{busy?'Please wait…':mode==='recover'?'Reset password':hasUsers?'Log in':'Create account'}</button>{hasUsers&&<button type="button" disabled={busy} onClick={()=>switchMode(mode==='recover'?'login':'recover')}>{mode==='recover'?'Back to login':'Forgot owner password?'}</button>}</form></div>;
 }
