@@ -1,0 +1,4 @@
+import Icon from './Icon.jsx';
+export function PageIntro({eyebrow,title,description,children}){return <section className="page-intro"><div>{eyebrow&&<p className="eyebrow">{eyebrow}</p>}<h2>{title}</h2>{description&&<p className="intro-copy">{description}</p>}</div>{children&&<div className="intro-actions">{children}</div>}</section>;}
+export function Metric({icon,label,value,note,tone=''}){return <article className={'card stat '+tone}><div className="stat-top"><span className="stat-label">{label}</span><span className="stat-icon"><Icon name={icon}/></span></div><strong className="stat-value">{value}</strong>{note&&<p className="stat-note">{note}</p>}</article>;}
+export function EmptyState({icon='orders',title,description,children,compact=false}){return <div className={'empty'+(compact?' compact':'')}><div className="empty-icon"><Icon name={icon} size={28}/></div><h3>{title}</h3>{description&&<p>{description}</p>}{children}</div>;}

@@ -7,6 +7,9 @@ Camping Lodge · 071 552 4499 · LKR
 3. Client:  `cd client && npm install && npm run dev`  (http://localhost:5173, proxies /api to the server)
 
 ## Structure
+
+The interface adapts to phones, tablets and desktops. Desktop navigation is grouped by task; phones have a menu drawer and quick links at the bottom. Tables become labelled cards on narrow screens. Dialogs support keyboard focus, Escape where a safe close action exists, and focus return. Money tabs support arrow-key navigation. Motion preferences and printable invoice layouts are respected.
+
 - server/models/index.js: database models for rentals, inventory, finance, access, audit and backups.
 - server/routes/: authenticated feature APIs with permissions and transactional business writes.
 - client/src/pages/: application screens. See [WORKFLOWS.md](WORKFLOWS.md) for daily use and [DEPLOYMENT.md](DEPLOYMENT.md) for deployment.

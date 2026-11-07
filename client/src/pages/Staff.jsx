@@ -1,3 +1,4 @@
+import ResponsiveTable from '../components/ResponsiveTable.jsx';
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import {permissionLabels} from '../permissions.js';
@@ -27,7 +28,7 @@ export default function Staff({ me }) {
   return (
     <>
       <div className="bar"><button className="btn" onClick={() => { setErr(''); setForm(blank); }}>Add user</button></div>
-      <div className="tablewrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th></th></tr></thead>
+      <div className="tablewrap"><ResponsiveTable><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th></th></tr></thead>
         <tbody>{list.map(u => (
           <tr key={u._id}><td data-l="Name"><b>{u.name}</b>{u._id === me.id && <small>(you)</small>}</td><td data-l="Username">{u.username}</td><td data-l="Role">{u.role}</td>
             <td data-l="Status"><span className={'dot' + (u.online ? ' on' : '')} />{!u.active ? 'disabled' : u.online ? 'online' : 'offline'}</td>
@@ -36,7 +37,7 @@ export default function Staff({ me }) {
               {canManage(u) && <button onClick={() => patch(u, { active: !u.active })}>{u.active ? 'Disable' : 'Enable'}</button>}
               {canManage(u) && <button onClick={() => del(u)}>Delete</button>}
               {isOwner&&u.role==='staff'&&<button onClick={()=>setPermissions({user:u,selected:u.permissions||[]})}>Permissions</button>}
-            </td></tr>))}</tbody></table></div>
+            </td></tr>))}</tbody></ResponsiveTable></div>
       {form && (
         <div className="modal" onClick={() => setForm(null)}>
           <form onClick={e => e.stopPropagation()} onSubmit={save}>

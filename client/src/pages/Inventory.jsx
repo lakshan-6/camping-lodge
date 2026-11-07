@@ -1,6 +1,9 @@
+import ResponsiveTable from '../components/ResponsiveTable.jsx';
 import { useCallback, useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
 import {can} from '../permissions.js';
+import {PageIntro,EmptyState} from '../components/UI.jsx';
+import Icon from '../components/Icon.jsx';
 
 const blank = { name: '', category: '', sku: '', totalQuantity: 1, periodRate: '', deposit: 0, damagedQty: 0, condition: 'good', notes: '' };
 const condLabel = { good: 'Good', fair: 'Fair', needs_repair: 'Needs repair' };
@@ -36,20 +39,21 @@ export default function Inventory({me}) {
 
   return (
     <>
-      <div className="bar">
-        <input placeholder="Search name or SKU" value={q} onChange={e => setQ(e.target.value)} />
-        <select value={cat} onChange={e => setCat(e.target.value)}>
+      <PageIntro eyebrow="Equipment & stock" title="Adventure starts with good gear." description="Keep equipment organised, check your stock and prepare every item for its next rental."/>
+      <div className="bar filter-panel">
+        <div className="search-field"><Icon name="search" size={18}/><input aria-label="Search equipment" type="search" placeholder="Search name or SKU" value={q} onChange={e => setQ(e.target.value)} /></div>
+        <select aria-label="Equipment category" value={cat} onChange={e => setCat(e.target.value)}>
           <option value="">All categories</option>
           {categories.map(c => <option key={c}>{c}</option>)}
         </select>
         <label className="check"><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>Archived items</label>
-        {can(me,'inventory.manage')&&<button className="btn" onClick={() => { setErr(''); setForm({...blank,requestId:crypto.randomUUID()}); }}>Add equipment</button>}
+        {can(me,'inventory.manage')&&<button className="btn" onClick={() => { setErr(''); setForm({...blank,requestId:crypto.randomUUID()}); }}><Icon name="plus" size={17}/>Add equipment</button>}
       </div>
       {err && !form && <p className="bad">{err}</p>}
       {items.length === 0 ? (
-        <div className="empty"><h2>No equipment found</h2><p>Add your first item to start building your inventory.</p></div>
+        <EmptyState icon="tent" title="No equipment found" description={q||cat?'Try another search or choose a different category.':'Add your first item to start building your inventory.'}/>
       ) : (
-        <div className="tablewrap"><table>
+        <div className="tablewrap"><ResponsiveTable>
           <thead><tr><th>Item</th><th>Category</th><th>Units</th><th>Rate / 36h</th><th>Deposit</th><th>Condition</th><th></th></tr></thead>
           <tbody>{items.map(i => (
             <tr key={i._id}>
@@ -64,7 +68,7 @@ export default function Inventory({me}) {
                 {archived?<button onClick={()=>api(`/equipment/${i._id}/restore`,{method:'POST',body:{requestId:crypto.randomUUID()}}).then(load).catch(e=>setErr(e.message))}>Restore item</button>:<button onClick={() => archive(i)}>Archive</button>}</>}
               </td>
             </tr>))}</tbody>
-        </table></div>
+        </ResponsiveTable></div>
       )}
       {form && (
         <div className="modal" onClick={() => setForm(null)}>

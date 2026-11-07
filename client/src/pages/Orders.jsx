@@ -1,3 +1,4 @@
+import ResponsiveTable from '../components/ResponsiveTable.jsx';
 import {businessISO} from '../businessTime.js';
 import { useEffect, useState, useRef } from 'react';
 import { api, lkr } from '../api.js';
@@ -7,6 +8,8 @@ import { PhoneInput, NicInput } from '../components/ContactInputs.jsx';
 import CustomerMatches from '../components/CustomerMatches.jsx';
 import OrderWorkspace from '../components/OrderWorkspace.jsx';
 import { can } from '../permissions.js';
+import {PageIntro,EmptyState} from '../components/UI.jsx';
+import Icon from '../components/Icon.jsx';
 
 const fmt = d => new Date(d).toLocaleString('en-LK', { timeZone:'Asia/Colombo', dateStyle: 'medium', timeStyle: 'short' });
 const periodsOf = (s, e) => Math.max(1, Math.ceil((new Date(e) - new Date(s)) / (36 * 3600 * 1000)));
@@ -94,14 +97,15 @@ export default function Orders({ me }) {
 
   return (
     <>
-      <div className="bar">{can(me,'orders.write')&&<button className="btn" onClick={() => { setErr(''); setForm({...blank,requestId:crypto.randomUUID(),customerRequestId:crypto.randomUUID()}); }}>New order</button>}
+      <PageIntro eyebrow="Bookings & rentals" title="The next adventure starts here." description="Create bookings, find an existing order and keep every pickup and return on schedule."/>
+      <div className="bar">{can(me,'orders.write')&&<button className="btn" onClick={() => { setErr(''); setForm({...blank,requestId:crypto.randomUUID(),customerRequestId:crypto.randomUUID()}); }}><Icon name="plus" size={17}/>New order</button>}
         {me?.role === 'owner' && <label className="check"><input type="checkbox" checked={showDeleted} onChange={e => {setShowDeleted(e.target.checked);setStatus('');setPage(1);}} /> Previously hidden past orders</label>}
       </div>
-      <div className="bar"><label>Search orders<input type="search" placeholder="Order number, customer, phone or NIC" maxLength={80} value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}/></label><label>Status<select value={status} disabled={showDeleted} onChange={e=>{setStatus(e.target.value);setPage(1);}}><option value="">All statuses</option>{['reserved','active','completed','cancelled'].map(s=><option key={s} value={s}>{s}</option>)}</select></label><label>Pickup from<input type="date" value={from} onChange={e=>{setFrom(e.target.value);setPage(1);}}/></label><label>Pickup to<input type="date" value={to} onChange={e=>{setTo(e.target.value);setPage(1);}}/></label><button onClick={()=>{setSearch('');setStatus('');setFrom('');setTo('');setPage(1);}}>Clear filters</button></div>
+      <div className="bar filter-panel"><label>Search orders<input type="search" placeholder="Order no., customer, phone or NIC" maxLength={80} value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}/></label><label>Status<select value={status} disabled={showDeleted} onChange={e=>{setStatus(e.target.value);setPage(1);}}><option value="">All statuses</option>{['reserved','active','completed','cancelled'].map(s=><option key={s} value={s}>{s}</option>)}</select></label><label>Pickup from<input type="date" value={from} onChange={e=>{setFrom(e.target.value);setPage(1);}}/></label><label>Pickup to<input type="date" value={to} onChange={e=>{setTo(e.target.value);setPage(1);}}/></label><button onClick={()=>{setSearch('');setStatus('');setFrom('');setTo('');setPage(1);}}>Clear filters</button></div>
       {err && !form && <p className="bad">{err}</p>}
       {loading&&<p role="status">Loading orders…</p>}
-      {orders.length === 0 ? <div className="empty"><h2>{loading?'Loading…':'No matching orders'}</h2><p>Adjust the filters or create a new order.</p></div> : (
-        <div className="tablewrap"><table>
+      {orders.length === 0 ? <EmptyState title={loading?'Loading your orders…':'No matching orders'} description="Adjust the filters or create a new order to get started."/> : (
+        <div className="tablewrap"><ResponsiveTable>
           <thead><tr><th>Order</th><th>Customer</th><th>Pickup</th><th>Return</th><th>Items</th><th>Total</th><th>Status</th><th></th></tr></thead>
           <tbody>{orders.map(o => (
             <tr key={o._id}>
@@ -112,7 +116,7 @@ export default function Orders({ me }) {
               <td data-l="Status"><span className={'tag ' + (o.status === 'cancelled' ? 'needs_repair' : '')}>{o.status}</span></td>
               <td className="acts"><button onClick={()=>setWorkspace(o._id)}>View order</button>{o.customer?.detailsPending && can(me,'customers.write') && <button onClick={() => setDetails(o.customer)}>Add details</button>}{o.status === 'reserved' && can(me,'orders.write') && <><button onClick={() => setEditing(o)}>Change items</button><button onClick={() => cancel(o)}>Cancel booking</button></>}{['reserved', 'cancelled'].includes(o.status) && can(me,'orders.write') && <button onClick={() => remove(o)}>Hide from list</button>}{o.status === 'completed' && me?.role === 'owner' && <button onClick={() => openPastDelete(o)}>Delete permanently</button>}</td>
             </tr>))}</tbody>
-        </table></div>)}
+        </ResponsiveTable></div>)}
       <div className="bar"><span>{totalRows} matching orders · Page {page} of {Math.max(1,Math.ceil(totalRows/pageSize))}</span><button disabled={loading||page<=1} onClick={()=>setPage(page-1)}>Previous</button><button disabled={loading||page*pageSize>=totalRows} onClick={()=>setPage(page+1)}>Next</button><label>Per page<select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setPage(1);}}>{[25,50,100].map(n=><option key={n}>{n}</option>)}</select></label></div>
       {editing && <EditOrder order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {workspace&&<OrderWorkspace id={workspace} me={me} onClose={()=>setWorkspace(null)} onSaved={load}/>}
@@ -135,7 +139,7 @@ export default function Orders({ me }) {
             <label>Type {pastDelete.orderNo} to confirm<input required autoComplete="off" value={confirmation} onChange={e => setConfirmation(e.target.value)} disabled={deleting} /></label>
             {deleteError && <p className="bad" role="alert">{deleteError}</p>}
             <div className="row end"><button type="button" disabled={deleting} onClick={closePastDelete}>Cancel</button>
-              <button className="btn" disabled={deleting || !deletePreview || !accessKey.trim() || confirmation !== pastDelete.orderNo}>{deleting ? 'Deleting…' : 'Delete permanently'}</button></div>
+              <button className="btn btn-danger" disabled={deleting || !deletePreview || !accessKey.trim() || confirmation !== pastDelete.orderNo}>{deleting ? 'Deleting…' : 'Delete permanently'}</button></div>
           </form>
         </div>
       )}

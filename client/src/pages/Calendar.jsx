@@ -1,3 +1,4 @@
+import ResponsiveTable from '../components/ResponsiveTable.jsx';
 import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
 import {businessDate} from '../businessTime.js';
@@ -39,10 +40,10 @@ export default function Calendar() {
       </div>
       <h3>{sel.toLocaleDateString('en-LK', { dateStyle: 'full' })}</h3>
       {on(sel).length === 0 ? <div className="empty"><p>No orders on this day.</p></div> : (
-        <div className="tablewrap"><table><thead><tr><th>Order</th><th>Customer</th><th>Pickup</th><th>Return</th><th>Items</th><th>Status</th><th>Total</th></tr></thead>
+        <div className="tablewrap"><ResponsiveTable><thead><tr><th>Order</th><th>Customer</th><th>Pickup</th><th>Return</th><th>Items</th><th>Status</th><th>Total</th></tr></thead>
           <tbody>{on(sel).map(o => (
             <tr key={o._id}><td data-l="Order"><b>{o.orderNo}</b></td><td data-l="Customer">{o.customer?.name}</td><td data-l="Pickup">{fmt(o.startDate)}</td><td data-l="Return">{fmt(o.endDate)}</td>
-              <td data-l="Items">{o.items.map(i => `${i.quantity}× ${i.equipment?.name}`).join(', ')}</td><td data-l="Status">{o.status}</td><td data-l="Total">{lkr(o.totalAmount)}</td></tr>))}</tbody></table></div>)}
+              <td data-l="Items">{o.items.map(i => `${i.quantity}× ${i.equipment?.name}`).join(', ')}</td><td data-l="Status">{o.status}</td><td data-l="Total">{lkr(o.totalAmount)}</td></tr>))}</tbody></ResponsiveTable></div>)}
     </>
   );
 }
