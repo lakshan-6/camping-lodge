@@ -57,6 +57,7 @@ r.put('/:id',requirePermission('customers.write'),wrap(async(req,res)=>{
  res.json(await mutate(req,'customer.edit:'+req.params.id,async session=>{
  const customer=await Customer.findById(req.params.id).session(session);if(!customer)throw httpErr(404,'Customer not found');
  const contact=customerContact(req.body),matches=await matchesContact(contact,customer._id,session);
+ if(contact.nic!==(customer.nic||'')&&await Order.exists({customer:customer._id,nicHeldAt:{$ne:null},nicReturnedAt:null}).session(session))throw httpErr(409,'Return this customer’s held NIC before changing their NIC number');
  if(matches.some(c=>contact.nic&&c.nic?.toUpperCase()===contact.nic))throw httpErr(409,'A customer with this NIC already exists');
  const before=customer.toObject();customer.set({...pick(req.body),...contact,phoneKey:phoneKey(contact.phone)});
  if(customer.detailsPending&&customer.nic&&customer.name&&!/^WhatsApp /.test(customer.name))customer.detailsPending=false;

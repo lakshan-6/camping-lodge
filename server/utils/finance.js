@@ -1,5 +1,5 @@
 import { Order, OrderItem, Payment, Invoice, DepositTransaction, Equipment, Rental } from '../models/index.js';
-import { money, methodOf, units } from './operations.js';
+import { money, methodOf, units, audit } from './operations.js';
 import { httpErr, availability, countPeriods } from './availability.js';
 import { nextDocumentNumber } from './documentNumbers.js';
 import { assertPermission } from './permissions.js';
@@ -11,6 +11,18 @@ export async function paidTotal(id, session = null) {
 export async function depositHeld(id, session = null) {
   const rows = await DepositTransaction.find({ order: id }).session(session);
   return Math.round(rows.reduce((s,p) => s + (p.type === 'collect' ? p.amount : -p.amount),0)*100)/100;
+}
+export async function recordSecurityDeposit(order,body,user,session){
+  const type=body.type;if(!['collect','refund','apply'].includes(type))throw httpErr(400,'Choose a deposit action');
+  assertPermission(user,type==='collect'?'payments.record':'payments.refund');
+  const amount=money(body.amount),held=await depositHeld(order._id,session);
+  if(type==='collect'&&(order.securityMethod==='nic'||(order.nicHeldAt&&!order.nicReturnedAt)))throw httpErr(409,'This order uses NIC security. Return any held NIC and choose money security before collecting a deposit.');
+  if(type==='collect'&&(order.status==='cancelled'||amount>Math.max(0,order.depositAmount-held)))throw httpErr(409,'Deposit collection exceeds the required deposit or this booking is cancelled');
+  if(type!=='collect'&&amount>held)throw httpErr(409,'Amount exceeds the held security deposit');
+  if(type!=='collect'&&!body.reason?.trim())throw httpErr(400,'Enter a reason');
+  if(type==='apply')await recordPayment(order,{amount,type:'balance',method:'other',reference:'Applied security deposit',reason:body.reason},{...user,role:user.role,permissions:[...(user.permissions||[]),'payments.record']},session);
+  const [row]=await DepositTransaction.create([{order:order._id,type,amount,method:methodOf(body.method),reason:body.reason,actor:user._id}],{session});
+  await audit(session,user,'security_deposit.'+type,order._id,{held},{amount,held:held+(type==='collect'?amount:-amount)});return row;
 }
 export async function syncInvoice(order, session, create = false) {
   let invoice = await Invoice.findOne({ order: order._id, status: { $ne: 'void' } }).session(session);
@@ -64,7 +76,7 @@ export async function priceItems(body, session, exclude) {
   return { start,end,periods,lines,total:money(total,'Total',true),deposit:money(deposit,'Deposit',true) };
 }
 export async function remainingLines(order, session = null) {
-  return (await OrderItem.find({order}).populate('equipment','name checklist').session(session)).map(i=>({
+  return (await OrderItem.find({order}).populate('equipment','name checklist trackUnits').session(session)).map(i=>({
     ...i.toObject(), remaining: Math.max(0,i.quantity-(i.returnedQuantity||0))
   }));
 }

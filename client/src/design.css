@@ -2247,3 +2247,16 @@ td[data-actions] {
     text-align: right
   }
 }
+/* Physical collateral and individually labelled equipment. */
+.security-card { border-left: 4px solid var(--pine, #184c3b); }
+.security-card h3 { margin: 0; }
+.security-card small { display: block; margin-bottom: 12px; }
+.unit-picker { min-width: 0; margin: 20px 0; padding: 16px; border: 1px solid #dbe4df; border-radius: 14px; }
+.unit-picker legend { padding: 0 8px; font-weight: 700; }
+.unit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; max-height: 320px; overflow-y: auto; }
+.unit-choice { padding: 12px; margin: 0; border: 1px solid #dbe4df; border-radius: 10px; background: #f8faf8; }
+.unit-choice:has(input:checked) { background: #e6f2e9; border-color: #39835b; }
+.unit-code { font-family: ui-monospace, monospace; letter-spacing: .04em; }
+.unit-return-list { display: grid; gap: 10px; margin-top: 16px; }
+.unit-return-list label { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr); align-items: center; gap: 12px; margin: 0; }
+@media (max-width: 400px) { .unit-return-list label { grid-template-columns: 1fr; gap: 4px; } .unit-grid { grid-template-columns: 1fr; } }

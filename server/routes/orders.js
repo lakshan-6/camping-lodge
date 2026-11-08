@@ -9,6 +9,7 @@ import { mutate, audit, money, methodOf } from '../utils/operations.js';
 import { requirePermission, assertPermission, can } from '../utils/permissions.js';
 import { priceItems, paidTotal, recordPayment, syncInvoice, depositHeld } from '../utils/finance.js';
 import {dayRange} from '../utils/businessTime.js';
+import {securityMethod,chooseSecurity,receiveNic,releaseNic,nicHeld} from '../utils/securityDeposit.js';
 const r=Router(), wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const ownerOnly=(req,res,next)=>req.user?.role==='owner'?next():next(httpErr(403,'Only the owner can delete past orders'));
 const limit=rateLimit({windowMs:15*60*1000,limit:5,keyGenerator:req=>String(req.user._id),standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many deletion attempts. Try again in 15 minutes.'}});
@@ -31,7 +32,7 @@ r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
   const result=await mutate(req,'order.create',async session=>{
     if(!await Customer.findById(req.body.customer).session(session))throw httpErr(400,'Choose an existing customer');
     const p=await priceItems(req.body,session);
-    const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:req.body.customer,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:p.deposit,notes:req.body.notes}],{session});
+    const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:req.body.customer,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:p.deposit,securityMethod:securityMethod(req.body.securityMethod??'money'),notes:req.body.notes}],{session});
     await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
     if(Number(req.body.advance?.amount)>0)await recordPayment(order,{...req.body.advance,type:'deposit'},req.user,session);
     await audit(session,req.user,'order.created',order._id,null,order);return order;
@@ -52,6 +53,7 @@ r.patch('/:id/cancel',requirePermission('orders.write'),wrap(async(req,res)=>{
   res.json(await mutate(req,'order.cancel:'+req.params.id,async session=>{
     const order=await Order.findById(req.params.id).session(session);
     if(!order||order.deletedAt)throw httpErr(404,'Order not found');if(order.status!=='reserved')throw httpErr(409,'Only reserved bookings can be cancelled');
+    if(nicHeld(order))throw httpErr(409,'Record returning the held NIC before cancelling this booking');
     const before=order.toObject(),paid=await paidTotal(order._id,session),held=await depositHeld(order._id,session);
     if(held>0)throw httpErr(409,'Refund or apply the held security deposit before cancelling');
     const action=req.body.action||'pending';if(!['refund','keep','pending'].includes(action))throw httpErr(400,'Choose a cancellation payment action');
@@ -61,6 +63,21 @@ r.patch('/:id/cancel',requirePermission('orders.write'),wrap(async(req,res)=>{
     await Invoice.updateMany({order:order._id,status:{$ne:'void'}},{$set:{status:'void'}},{session});
     await audit(session,req.user,'order.cancelled',order._id,before,order);return order;
   }));
+}));
+r.post('/:id/security',wrap(async(req,res)=>{
+ const action=req.body.action;if(!['set','receive','return'].includes(action))throw httpErr(400,'Choose a security action');
+ assertPermission(req.user,action==='set'?'orders.write':action==='return'?'returns.write':'rentals.write');
+ res.json(await mutate(req,'order.security:'+req.params.id,async session=>{
+  const order=await Order.findById(req.params.id).session(session);if(!order||order.deletedAt)throw httpErr(404,'Order not found');
+  if(action==='set'){
+   if(order.status!=='reserved')throw httpErr(409,'Choose the security method before handover');
+   const before=order.securityMethod;await chooseSecurity(order,req.body.method,session);await audit(session,req.user,'security.method_changed',order._id,{method:before},{method:order.securityMethod});
+  }else{
+   if(req.body.confirmed!==true)throw httpErr(400,'Confirm the NIC was physically received or returned');
+   if(action==='receive'){await chooseSecurity(order,'nic',session);await receiveNic(order,req.user,session);}else await releaseNic(order,req.user,session);
+  }
+  await order.save({session});return {ok:true,securityMethod:order.securityMethod,nicHeld:nicHeld(order),nicHeldAt:order.nicHeldAt,nicReturnedAt:order.nicReturnedAt};
+ }));
 }));
 r.get('/:id/detail',wrap(async(req,res)=>{
   const order=await Order.findById(req.params.id).populate('customer').lean();if(!order)throw httpErr(404,'Order not found');
@@ -79,6 +96,7 @@ r.delete('/:id/past',ownerOnly,limit,wrap(async(req,res)=>{
 r.delete('/:id',requirePermission('orders.write'),wrap(async(req,res)=>{
   res.json(await mutate(req,'order.hide:'+req.params.id,async session=>{
     const order=await Order.findById(req.params.id).session(session);if(!order||order.deletedAt)throw httpErr(404,'Booking not found');
+    if(nicHeld(order))throw httpErr(409,'Return the held NIC before hiding this booking');
     if(!['reserved','cancelled'].includes(order.status))throw httpErr(409,'Only uncollected bookings can be removed');
     if(await paidTotal(order._id,session)>0||await depositHeld(order._id,session)>0)throw httpErr(409,'Resolve the advance/refund and security deposit before removing this booking');
     order.status='cancelled';order.deletedAt=new Date();order.deletedBy=req.user._id;await order.save({session});

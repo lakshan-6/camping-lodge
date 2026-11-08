@@ -6,6 +6,20 @@ Enter a phone number or NIC to see existing customer matches before creating a n
 
 Bookings check available whole-unit quantities. A booking and its advance save together, and retrying a submitted form does not create a second booking/payment. At pickup, complete pending customer details and the equipment checklist. The actual handover time starts the rental period and availability is checked again, including conflicting future bookings. A period is 36 hours.
 
+## NIC or money as rental security
+
+New order > Rental security chooses **Keep customer NIC** or **Refundable money deposit**. This is a plan, not a receipt. At handover, explicitly confirm the physical NIC received, or enter and confirm the money deposit actually received. An existing recorded deposit also satisfies money security. Rental payments remain separate; a NIC never adds to cash, revenue or a refundable money balance. Staff need payment permission to record money, but can receive/return NICs with their handover/return permissions.
+
+The customer must have a valid NIC number before their physical NIC can be recorded as held. The same customer's NIC cannot be held for two orders at once. View order > Security for this rental shows its custody status. Return all equipment first, then confirm the NIC was physically returned, either in the final return form or later in View order. A completed order can still show **NIC held · return pending**. Returning equipment alone never releases the NIC. A held NIC blocks cancellation, hiding and permanent deletion until its return is recorded. Refund/apply held money before switching to NIC, or return a held NIC before switching to money. Security type changes belong before handover.
+
+## Identify individual physical units
+
+For equipment that needs this, enable **Track each physical unit with its own code** when adding/editing inventory. Choose a 2–12 letter/number prefix such as **SB**. Ten sleeping bags generate SB-001 through SB-010 (the sequence continues if that prefix was used before). Open **Unit codes > Print unit labels**, then physically attach one durable matching label to each item. The system cannot identify an unlabelled bag by appearance.
+
+At pickup select exactly the booked number of ready unit codes. At return choose **Returned · good**, **Returned · damaged**, **Lost**, or **Not returned yet** for each code. For example, mark only SB-004 damaged: its history links it to that customer/order, and it cannot be handed out again until repaired. Repairs select exact damaged codes and completing the repair makes those codes ready again. Unit codes also show the current rental and recorded rental/repair history. In-store damage, loss or retirement can be recorded through **Change condition** with a reason; units still out or in repair must use Returns or Repairs.
+
+Tracking is optional for each equipment type. Existing items can enable it after outstanding rentals and open repairs finish. Old rentals cannot acquire physical unit identities retrospectively. Once enabled, codes and tracking remain permanent. Increasing total quantity creates more codes; decreasing quantities or changing damaged counts requires selecting the actual unit codes. Lost/retired labels remain in history and are never reused. A matching stock count can be recorded after correcting those specific units. Completed order deletion removes that order's unit allocation history along with its other records, while keeping physical unit labels and stock unchanged. New encrypted backups contain the labels; old backups still validate, but restoring one predating these changes also restores its older data.
+
 ## Extensions and returns
 
 Extend an outstanding rental from Rentals. Remaining equipment is checked against other bookings. Extra periods and any accrued late charges are added to the order and invoice. The estimate shown before saving is the extra-period charge; the saved charge includes any overdue amount after the configured grace period.

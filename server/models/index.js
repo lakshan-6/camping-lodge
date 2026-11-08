@@ -15,10 +15,18 @@ export const Equipment = model('Equipment', new Schema({
   damagedQty: { type: Number, min: 0, default: 0 },       // units damaged / in repair
   checklist: [String],
   revision: { type: Number, default: 0 },
+  trackUnits: { type: Boolean, default: false }, unitPrefix: String,
   condition: { type: String, enum: ['good', 'fair', 'needs_repair'], default: 'good' },
   notes: String,
   active: { type: Boolean, default: true },
 }, opts));
+
+export const EquipmentUnit = model('EquipmentUnit',new Schema({
+  equipment: ref('Equipment',{required:true,index:true}),
+  code: {type:String,required:true,unique:true,uppercase:true,trim:true,match:/^[A-Z0-9]{2,12}-[0-9]{3,}$/},
+  state: {type:String,enum:['good','out','damaged','repair','lost','retired'],default:'good',required:true},
+  rental: ref('Rental'), notes:String,
+},opts));
 
 export const Customer = model('Customer', new Schema({
   name: { type: String, required: true, trim: true },
@@ -27,6 +35,7 @@ export const Customer = model('Customer', new Schema({
   phoneKey: { type: String, index: true },
   email: { type: String, trim: true, lowercase: true },
   detailsPending: { type: Boolean, default: false },  // WhatsApp pre-booking: full details still to collect
+  securityRevision: { type: Number, default: 0 },
 }, opts));
 
 export const Order = model('Order', new Schema({
@@ -37,6 +46,8 @@ export const Order = model('Order', new Schema({
   status: { type: String, enum: ['reserved', 'active', 'completed', 'cancelled'], default: 'reserved' },
   totalAmount: { type: Number, default: 0 },
   depositAmount: { type: Number, default: 0 },
+  securityMethod: { type: String, enum: ['nic', 'money'], default: 'money' },
+  nicHeldAt: Date, nicHeldBy: ref('User'), nicReturnedAt: Date, nicReturnedBy: ref('User'),
   periods: Number,
   sendVia: { type: String, enum: ['email', 'whatsapp', 'both', 'none'], default: 'email' },  // how the customer gets their invoices
   deletedAt: Date,
@@ -54,6 +65,7 @@ export const OrderItem = model('OrderItem', new Schema({
   periods: { type: Number, required: true, min: 1 },
   lineTotal: { type: Number, required: true },
   returnedQuantity: { type: Number, default: 0 },
+  unitAssignments: [{unit:ref('EquipmentUnit',{required:true}),code:String,outcome:{type:String,enum:['out','good','damaged','lost'],default:'out'},returnedAt:Date}],
 }, opts));
 
 export const Rental = model('Rental', new Schema({
@@ -83,6 +95,7 @@ export const ReturnItem = model('ReturnItem', new Schema({
   quantityReturned: { type: Number, default: 0 },
   quantityDamaged: { type: Number, default: 0 },
   quantityLost: { type: Number, default: 0 },
+  units: [{unit:ref('EquipmentUnit',{required:true}),code:String,condition:{type:String,enum:['good','damaged','lost'],required:true}}],
   notes: String,
 }, opts));
 
@@ -151,6 +164,7 @@ export const Mutation = model('Mutation', new Schema({
 }, opts));
 export const Repair = model('Repair', new Schema({
   equipment: ref('Equipment', { required: true }), quantity: { type: Number, required: true, min: 1 },
+  units: [ref('EquipmentUnit')],
   status: { type: String, enum: ['open', 'completed'], default: 'open' }, notes: String, cost: Number, completedAt: Date,
 }, opts));
 export const Expense = model('Expense', new Schema({

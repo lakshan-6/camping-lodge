@@ -3,6 +3,7 @@ import {useEffect,useState} from 'react';
 import {api,getToken,lkr} from '../api.js';
 import {can} from '../permissions.js';
 import {sendInvoiceWhatsApp} from '../whatsapp.js';
+import SecurityDeposit from './SecurityDeposit.jsx';
 const labels={deposit:'Rental advance',rental:'Rental payment',balance:'Rental balance',fee:'Extra charge',refund:'Refund to customer'};
 export default function OrderWorkspace({id,me,onClose,onSaved}){
  const [data,setData]=useState(null),[error,setError]=useState(''),[form,setForm]=useState(null),[busy,setBusy]=useState(false),[email,setEmail]=useState(false),[history,setHistory]=useState(null);
@@ -15,9 +16,10 @@ export default function OrderWorkspace({id,me,onClose,onSaved}){
  <div className="bar"><h2>{data?.orderNo||'Order details'}</h2><button onClick={onClose} disabled={busy}>Close</button></div>
  {error&&<p className="bad" role="alert">{error}</p>}
  {data&&<><p><b>{data.customer?.name}</b> · {data.customer?.phone} · {data.status}</p><div className="metric-row"><p>Rental total <b>{lkr(data.totalAmount)}</b></p><p>Rental payments <b>{lkr(data.paid)}</b></p><p>Rental balance <b>{lkr(data.status==='cancelled'?0:data.totalAmount-data.paid)}</b></p><p>Security deposit held <b>{lkr(data.securityHeld)}</b></p></div>
- <ResponsiveTable><thead><tr><th>Item</th><th>Qty</th><th>Returned</th><th>Amount</th></tr></thead><tbody>{data.items.map(i=><tr key={i._id}><td>{i.equipment?.name}</td><td>{i.quantity}</td><td>{i.returnedQuantity||0}</td><td>{lkr(i.lineTotal)}</td></tr>)}</tbody></ResponsiveTable>
+ <SecurityDeposit key={data._id} order={data} me={me} onSaved={async()=>{await load();onSaved?.();}}/>
+ <ResponsiveTable><thead><tr><th>Item</th><th>Qty</th><th>Returned</th><th>Unit codes</th><th>Amount</th></tr></thead><tbody>{data.items.map(i=><tr key={i._id}><td>{i.equipment?.name}</td><td>{i.quantity}</td><td>{i.returnedQuantity||0}</td><td>{i.unitAssignments?.length?i.unitAssignments.map(u=><small key={u.unit}><b>{u.code}</b> · {u.outcome}</small>):'Quantity tracked'}</td><td>{lkr(i.lineTotal)}</td></tr>)}</tbody></ResponsiveTable>
  <h3>Payments and refundable security deposit</h3><p>These actions record money received or paid outside this system. They do not charge a card or make a bank transfer.</p><div className="bar">
- {can(me,'payments.record')&&data.status!=='cancelled'&&<><button onClick={()=>open('rental',data.paid===0?'deposit':'balance')}>Record rental payment</button><button onClick={()=>open('security','collect')}>Collect security deposit</button></>}
+ {can(me,'payments.record')&&data.status!=='cancelled'&&<><button onClick={()=>open('rental',data.paid===0?'deposit':'balance')}>Record rental payment</button>{data.securityMethod!=='nic'&&<button onClick={()=>open('security','collect')}>Collect security deposit</button>}</>}
  {can(me,'payments.refund')&&<><button onClick={()=>open('rental','refund')} disabled={data.paid<=0}>Record rental refund</button><button onClick={()=>open('security','refund')} disabled={data.securityHeld<=0}>Refund security deposit</button><button onClick={()=>open('security','apply')} disabled={data.securityHeld<=0||data.status==='cancelled'}>Apply deposit to rental balance</button></>}
  {(can(me,'finance.view')||can(me,'payments.record')||can(me,'payments.refund'))&&<button onClick={()=>api('/payments/deposits/'+id).then(setHistory).catch(e=>setError(e.message))}>Deposit history</button>}
  </div>

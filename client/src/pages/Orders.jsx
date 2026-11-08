@@ -13,7 +13,7 @@ import Icon from '../components/Icon.jsx';
 
 const fmt = d => new Date(d).toLocaleString('en-LK', { timeZone:'Asia/Colombo', dateStyle: 'medium', timeStyle: 'short' });
 const periodsOf = (s, e) => Math.max(1, Math.ceil((new Date(e) - new Date(s)) / (36 * 3600 * 1000)));
-const blank = { customer: '', cq: '', newCust: false, pre: false, advance: '', advMethod: 'bank_transfer', nc: { name: '', phone: '', nic: '', email: '' }, start: '', end: '', lines: [{ equipment: '', quantity: 1 }] };
+const blank = { customer: '', cq: '', newCust: false, pre: false, securityMethod:'nic', advance: '', advMethod: 'bank_transfer', nc: { name: '', phone: '', nic: '', email: '' }, start: '', end: '', lines: [{ equipment: '', quantity: 1 }] };
 
 export default function Orders({ me }) {
   const [orders, setOrders] = useState([]);
@@ -70,7 +70,7 @@ export default function Orders({ me }) {
       let customer = form.customer;
       if (form.newCust) { const c = await api('/customers', { method: 'POST', body: { ...form.nc, preBooking: form.pre&&!form.detailsNow, confirmDifferentPerson:form.confirmDifferentPerson,requestId:form.customerRequestId } }); customer = c._id; setCustomers([...customers.filter(x=>x._id!==c._id), c]); }
       await api('/orders', { method: 'POST', body: { customer, startDate: businessISO(form.start),
-        endDate: businessISO(form.end), items: form.lines.filter(l => l.equipment), advance: { amount: +form.advance || 0, method: form.advMethod },requestId:form.requestId } });
+        endDate: businessISO(form.end), securityMethod:form.securityMethod, items: form.lines.filter(l => l.equipment), advance: { amount: +form.advance || 0, method: form.advMethod },requestId:form.requestId } });
       setForm(null); load();
     } catch (x) { setErr(x.message); } finally { setSaving(false); }
   }
@@ -147,6 +147,8 @@ export default function Orders({ me }) {
         <div className="modal" onClick={() => setForm(null)}>
           <form style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()} onSubmit={save}>
             <h2>New order</h2>
+            <label>Rental security<select value={form.securityMethod} onChange={e=>setForm({...form,securityMethod:e.target.value})}><option value="nic">Keep customer NIC</option><option value="money">Refundable money deposit</option></select></label>
+            <p className="hint">Choose the planned security now. Confirm the physical NIC or money actually received at handover.</p>
             <div className="custbox">
               <div className="row3">
                 {[['existing', 'Existing'], ...(can(me,'customers.write')?[['new', 'New customer'], ['pre', 'WhatsApp pre-booking']]:[])].map(([m, l]) => (

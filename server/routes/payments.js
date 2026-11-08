@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { Order,Payment,DepositTransaction } from '../models/index.js';
 import { httpErr } from '../utils/availability.js';
-import { mutate,audit,money,methodOf } from '../utils/operations.js';
-import { requirePermission,can,assertPermission } from '../utils/permissions.js';
-import { recordPayment,paidTotal,depositHeld,syncInvoice } from '../utils/finance.js';
+import { mutate,audit } from '../utils/operations.js';
+import { can } from '../utils/permissions.js';
+import { recordPayment,paidTotal,depositHeld,recordSecurityDeposit } from '../utils/finance.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const view=(req,res,next)=>can(req.user,'finance.view')||can(req.user,'payments.record')||can(req.user,'payments.refund')?next():next(httpErr(403,'Financial access is not enabled for this account'));
 r.get('/balances',wrap(async(req,res)=>{
@@ -22,15 +22,7 @@ r.get('/deposits/:order',view,wrap(async(req,res)=>res.json({held:await depositH
 r.post('/deposits',wrap(async(req,res)=>{
  res.status(201).json(await mutate(req,'security-deposit:'+req.body.order,async session=>{
  const order=await Order.findById(req.body.order).session(session);if(!order)throw httpErr(404,'Order not found');
- const type=req.body.type;if(!['collect','refund','apply'].includes(type))throw httpErr(400,'Choose a deposit action');
- assertPermission(req.user,type==='collect'?'payments.record':'payments.refund');
- const amount=money(req.body.amount),held=await depositHeld(order._id,session);
- if(type==='collect'&&(order.status==='cancelled'||amount>Math.max(0,order.depositAmount-held)))throw httpErr(409,'Deposit collection exceeds the required deposit or this booking is cancelled');
- if(type!=='collect'&&amount>held)throw httpErr(409,'Amount exceeds the held security deposit');
- if(type!=='collect'&&!req.body.reason?.trim())throw httpErr(400,'Enter a reason');
- if(type==='apply')await recordPayment(order,{amount,type:'balance',method:'other',reference:'Applied security deposit',reason:req.body.reason}, {...req.user,role:req.user.role,permissions:[...(req.user.permissions||[]),'payments.record']},session);
- const [row]=await DepositTransaction.create([{order:order._id,type,amount,method:methodOf(req.body.method),reason:req.body.reason,actor:req.user._id}],{session});
- await audit(session,req.user,'security_deposit.'+type,order._id,{held},{amount,held:held+(type==='collect'?amount:-amount)});return row;
+ return recordSecurityDeposit(order,req.body,req.user,session);
  }));
 }));
 export default r;

@@ -6,6 +6,7 @@ import {mutate,audit,money,units} from '../utils/operations.js';
 import {dayRange,localDate} from '../utils/businessTime.js';
 import {httpErr} from '../utils/availability.js';
 import {stockSnapshot,checkStock} from '../utils/stock.js';
+import {assertUnitTotals} from '../utils/equipmentUnits.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const cashView=(req,res,next)=>can(req.user,'finance.view')||can(req.user,'finance.close')?next():next(httpErr(403,'Cash reconciliation access is not enabled'));
 const round=n=>Math.round(n*100)/100;
@@ -51,8 +52,10 @@ r.get('/stock/:id',requirePermission('inventory.manage'),wrap(async(req,res)=>{
 r.post('/stock/:id',requirePermission('inventory.manage'),wrap(async(req,res)=>{
   res.status(201).json(await mutate(req,'stock.count:'+req.params.id,async session=>{
     const snapshot=await stockSnapshot(req.params.id,session),item=snapshot.item;
+    await assertUnitTotals(item,session);
     if(req.body.signature!==snapshot.signature)throw httpErr(409,'Stock or bookings changed. Refresh the count before saving.');
     const countedGood=units(req.body.countedGood,true),countedDamaged=units(req.body.countedDamaged,true);
+    if(item.trackUnits&&(countedGood!==snapshot.expectedGood||countedDamaged!==item.damagedQty))throw httpErr(409,'For labelled equipment, update the condition of the exact unit codes in Inventory first. Then record a matching physical count.');
     const total=units(countedGood+countedDamaged+snapshot.out,true);checkStock(snapshot,total,countedDamaged);
     const reason=typeof req.body.reason==='string'?req.body.reason.trim():'';
     if((total!==item.totalQuantity||countedDamaged!==item.damagedQty)&&!reason)throw httpErr(400,'Explain the stock difference before applying it');

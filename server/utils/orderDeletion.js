@@ -18,6 +18,7 @@ async function relatedRecords(id, session) {
   const order = await Order.findById(id).session(session).lean();
   if (!order) throw httpErr(404, 'Order not found');
   if (order.status !== 'completed') throw httpErr(409, 'Only completed orders can be permanently deleted. Receive outstanding returns first.');
+  if(order.nicHeldAt&&!order.nicReturnedAt)throw httpErr(409,'Return the held NIC before permanently deleting this order');
   const rentals = await Rental.find({ order: order._id }).session(session).lean();
   if (rentals.some(r => r.status !== 'returned')) throw httpErr(409, 'This order still has an outstanding rental. Receive its return first.');
   const returns = await Return.find({ rental: { $in: rentals.map(r => r._id) } }).session(session).lean();

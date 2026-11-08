@@ -57,7 +57,7 @@ test('business workflows against an isolated real MongoDB replica set',{skip:!pr
   assert.equal((await request('/orders','POST',{...body,items:[{equipment:equipment._id,quantity:1.5}],advance:{amount:0},requestId:crypto.randomUUID()})).status,400);
  });
  await t.test('pickup requires checklist, duplicate/concurrent pickup creates one rental and payment',async()=>{
-  const body={order:order._id,payBalance:true,method:'cash',sendVia:'none',requestId:crypto.randomUUID()};
+  const body={order:order._id,payBalance:true,method:'cash',sendVia:'none',securityMethod:'money',securityDeposit:{received:true,amount:1000,method:'cash'},requestId:crypto.randomUUID()};
   assert.equal((await request('/rentals/start','POST',body)).status,400);
   body.checklist=['Tent: Poles','Tent: Bag'].map(label=>({label,checked:true}));
   const results=await Promise.all([request('/rentals/start','POST',body),request('/rentals/start','POST',body)]);assert.deepEqual(results.map(x=>x.status),[201,201]);rental=results[0].data;
@@ -68,9 +68,9 @@ test('business workflows against an isolated real MongoDB replica set',{skip:!pr
   assert.equal((await request('/payments','POST',{order:order._id,amount:100000,type:'refund',reason:'test'})).status,409);
   assert.equal((await request('/payments','POST',{order:order._id,amount:1,type:'balance'})).status,409);
   const before=await M.Payment.countDocuments();await ok('/payments/deposits','POST',{order:order._id,type:'collect',amount:2000,requestId:crypto.randomUUID()});assert.equal(await M.Payment.countDocuments(),before);
-  assert.equal((await request('/payments/deposits','POST',{order:order._id,type:'refund',amount:2001,reason:'test'})).status,409);
+  assert.equal((await request('/payments/deposits','POST',{order:order._id,type:'refund',amount:3001,reason:'test'})).status,409);
   await ok('/payments/deposits','POST',{order:order._id,type:'refund',amount:500,reason:'Part released',requestId:crypto.randomUUID()});
-  const held=await ok('/payments/deposits/'+order._id);assert.equal(held.held,1500);
+  const held=await ok('/payments/deposits/'+order._id);assert.equal(held.held,2500);
   assert.equal((await request('/payments','POST',{order:order._id,amount:1,type:'refund',reason:'test'},staffToken)).status,403);
  });
  await t.test('partial returns release only received items; damage/loss and fees are not double-recorded',async()=>{
@@ -102,7 +102,7 @@ test('business workflows against an isolated real MongoDB replica set',{skip:!pr
   const b=await ok('/orders','POST',{customer:customer._id,startDate:new Date(now+3600000).toISOString(),endDate:new Date(now+36*3600000).toISOString(),items:[{equipment:eq._id,quantity:1}],requestId:crypto.randomUUID()});
   assert.equal((await request('/rentals/start','POST',{order:a._id,payBalance:false,sendVia:'none',requestId:crypto.randomUUID()})).status,409);
   await ok(`/orders/${b._id}/cancel`,'PATCH',{action:'pending',reason:'test',requestId:crypto.randomUUID()});
-  const started=await ok('/rentals/start','POST',{order:a._id,payBalance:false,sendVia:'none',requestId:crypto.randomUUID()});
+  const started=await ok('/rentals/start','POST',{order:a._id,payBalance:false,sendVia:'none',securityMethod:'nic',nicReceived:true,requestId:crypto.randomUUID()});
   const next=await ok('/orders','POST',{customer:customer._id,startDate:new Date(+new Date(started.dueDate)+1000).toISOString(),endDate:new Date(+new Date(started.dueDate)+36*3600000).toISOString(),items:[{equipment:eq._id,quantity:1}],requestId:crypto.randomUUID()});
   assert.equal((await request(`/rentals/${started._id}/extend`,'POST',{periods:1,requestId:crypto.randomUUID()})).status,409);
   await ok(`/orders/${next._id}/cancel`,'PATCH',{action:'pending',reason:'test',requestId:crypto.randomUUID()});

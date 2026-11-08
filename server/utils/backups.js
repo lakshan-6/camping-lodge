@@ -7,6 +7,7 @@ import { httpErr } from './availability.js';
 import { localDate } from './businessTime.js';
 import {securityFields,openSecret} from './mfa.js';
 import {externalStatus,externalConfig,uploadAndReadBack} from './externalBackups.js';
+import {validateUnitBackup} from './unitBackup.js';
 const EJSON=mongoose.mongo.BSON.EJSON;
 const collections=Object.entries(models).filter(([name])=>name!=='Backup');
 function key(){const raw=process.env.BACKUP_ENCRYPTION_KEY;if(!raw||raw.length<32)throw httpErr(503,'Backups need BACKUP_ENCRYPTION_KEY in the server environment (32 or more characters).');return crypto.createHash('sha256').update(raw).digest();}
@@ -26,12 +27,13 @@ function verifyKey(supplied){const expected=process.env.PAST_ORDER_DELETE_KEY;co
 export async function validateBackup(envelope){
  const data=decryptSnapshot(envelope);if(data.version!==1||!data.collections)throw httpErr(400,'Unsupported backup');
  // Older v1 snapshots predate these optional histories.
- for(const name of ['CashClose','StockCount'])if(data.collections[name]===undefined)data.collections[name]=[];
+ for(const name of ['CashClose','StockCount','EquipmentUnit'])if(data.collections[name]===undefined)data.collections[name]=[];
  for(const [name,model]of collections){const rows=data.collections[name];if(!Array.isArray(rows)||rows.length>50000)throw httpErr(400,'Invalid backup collection: '+name);const ids=new Set();for(const row of rows){if(!row._id||ids.has(String(row._id)))throw httpErr(400,'Missing or duplicate record id');ids.add(String(row._id));await new model(row).validate();}}
  if(!data.collections.User.some(u=>u.role==='owner'&&u.active))throw httpErr(400,'Backup must include an active owner');
  for(const user of data.collections.User){if(!Number.isSafeInteger(user.sessionVersion||0)||(user.sessionVersion||0)<0||(user.sessionVersion||0)>=Number.MAX_SAFE_INTEGER)throw httpErr(400,'Invalid account session version');if(user.mfaEnabled){if(typeof user.mfaSecret!=='string'||!/^[A-Z2-7]{32}$/.test(openSecret(user.mfaSecret)))throw httpErr(400,'Backup is missing valid authenticator credentials');}for(const field of ['mfaRecoveryHashes','accountRecoveryHashes'])if(user[field]!==undefined&&(!Array.isArray(user[field])||user[field].length>20||user[field].some(h=>typeof h!=='string'||!/^[a-f0-9]{64}$/.test(h))))throw httpErr(400,'Invalid recovery credentials in backup');}
  const has=(name,id)=>data.collections[name].some(r=>String(r._id)===String(id));
  for(const [name,field,target]of [['Order','customer','Customer'],['OrderItem','order','Order'],['OrderItem','equipment','Equipment'],['Rental','order','Order'],['Return','rental','Rental'],['ReturnItem','return','Return'],['Invoice','order','Order'],['Payment','order','Order'],['DepositTransaction','order','Order']])for(const row of data.collections[name])if(!has(target,row[field]))throw httpErr(400,`Broken ${name} reference in backup`);
+ validateUnitBackup(data.collections);
  return {data,summary:{createdAt:data.createdAt,collections:Object.fromEntries(collections.map(([name])=>[name,data.collections[name].length])),valid:true}};
 }
 export async function restoreBackup(envelope,confirmation,accessKey,user){
