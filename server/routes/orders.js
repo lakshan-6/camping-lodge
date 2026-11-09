@@ -32,7 +32,8 @@ r.get('/',wrap(async(req,res)=>{
 }));
 r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
   const result=await mutate(req,'order.create',async session=>{
-    const method=securityMethod(req.body.securityMethod??'money');
+    const requestedMethod=req.body.securityMethod??(req.body.depositAmount!==undefined?'money':null);
+    const method=requestedMethod===null?null:securityMethod(requestedMethod);
     let depositAmount;
     if(req.body.depositAmount!==undefined){
       if(method!=='money'||typeof req.body.depositAmount!=='number')throw httpErr(400,'Enter a money security deposit amount');
@@ -63,7 +64,7 @@ r.put('/:id',requirePermission('orders.write'),wrap(async(req,res)=>{
     if(order.status!=='reserved')throw httpErr(409,'Only uncollected bookings can be edited');
     const before=order.toObject();const p=await priceItems({startDate:req.body.startDate||order.startDate,endDate:req.body.endDate||order.endDate,items:req.body.items},session,order._id);
     await OrderItem.deleteMany({order:order._id},{session});await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
-    const depositAmount=order.securityMethod==='nic'?p.deposit:order.depositAmount??p.deposit;
+    const depositAmount=order.securityMethod==='money'?order.depositAmount??p.deposit:p.deposit;
     order.set({startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount});await order.save({session});
     await syncInvoice(order,session);await audit(session,req.user,'order.edited',order._id,before,order);return order;
   }));
@@ -91,6 +92,7 @@ r.post('/:id/security',wrap(async(req,res)=>{
  assertPermission(req.user,action==='set'?'orders.write':action==='return'?'returns.write':'rentals.write');
  res.json(await mutate(req,'order.security:'+req.params.id,async session=>{
   const order=await Order.findById(req.params.id).session(session);if(!order||order.deletedAt)throw httpErr(404,'Order not found');
+  if(order.status==='reserved'&&!order.securityMethod&&action!=='return')throw httpErr(409,'Choose and confirm security during pickup');
   if(action==='set'){
    if(order.status!=='reserved')throw httpErr(409,'Choose the security method before handover');
    const before=order.securityMethod;await chooseSecurity(order,req.body.method,session);await audit(session,req.user,'security.method_changed',order._id,{method:before},{method:order.securityMethod});

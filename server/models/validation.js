@@ -47,7 +47,7 @@ export const Order = model('Order', new Schema({
   status: { type: String, enum: ['reserved', 'active', 'completed', 'cancelled'], default: 'reserved' },
   totalAmount: { type: Number, default: 0 },
   depositAmount: { type: Number, default: 0 },
-  securityMethod: { type: String, enum: ['nic', 'money'], default: 'money' },
+  securityMethod: { type: String, enum: ['nic', 'money'] },
   nicHeldAt: Date, nicHeldBy: ref('User'), nicReturnedAt: Date, nicReturnedBy: ref('User'),
   periods: Number,
   sendVia: { type: String, enum: ['email', 'whatsapp', 'both', 'none'], default: 'email' },  // how the customer gets their invoices

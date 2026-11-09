@@ -78,7 +78,8 @@ export function sendBookingConfirmation(orderId) {
     return { title: 'Booking confirmation', tag: 'booking-confirmation', intro: 'Your rental booking is confirmed. Here are your order details.', details: [
       ['Pickup (Sri Lanka time)', date(order.startDate)], ['Return (Sri Lanka time)', date(order.endDate)],
       ['Rental total', money(order.totalAmount)], ['Rental payment recorded', money(paid)], rentalBalance(order, paid),
-      ['Security at pickup', order.securityMethod === 'nic' ? 'Bring your NIC' : `Refundable money deposit: ${money(order.depositAmount)}`],
+      ['Security at pickup', order.securityMethod === 'nic' ? 'Bring your NIC' :
+        order.securityMethod === 'money' ? `Refundable money deposit: ${money(order.depositAmount)}` : 'Bring your NIC or a refundable money deposit. Choose at pickup.'],
     ], itemLines: items.map(item => `${item.quantity} × ${itemName(item)} — ${money(item.lineTotal)}`) };
   });
 }

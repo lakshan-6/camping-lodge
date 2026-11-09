@@ -24,8 +24,6 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
   const [start, setStart] = useState(''), [end, setEnd] = useState('');
   const [lines, setLines] = useState(() => [newLine()]);
   const [availability, setAvailability] = useState(null);
-  const [method, setMethod] = useState('');
-  const [depositAmount, setDepositAmount] = useState('');
   const [advance, setAdvance] = useState(''), [advanceMethod, setAdvanceMethod] = useState('bank_transfer');
   const [requestId] = useState(() => crypto.randomUUID());
   const [saving, setSaving] = useState(false), [error, setError] = useState('');
@@ -59,7 +57,6 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
   const chosen = lines.map(line => items.find(i => i._id === line.equipment));
   const itemsReady = !!dates?.items && lines.every((l, i) => chosen[i] && Number.isInteger(+l.quantity) && +l.quantity >= 1 && +l.quantity <= chosen[i].available);
   const total = chosen.reduce((sum, item, i) => sum + (item ? item.periodRate * (+lines[i].quantity || 0) * dates.periods : 0), 0);
-  const deposit = chosen.reduce((sum, item, i) => sum + (item ? (item.deposit || 0) * (+lines[i].quantity || 0) : 0), 0);
   const lookupResult = lookup?.key === lookupKey ? lookup : null;
   const existing = lookupResult?.matches?.find(c => c.nic?.toUpperCase() === customer.nic.toUpperCase());
   const incompleteMatches = existing ? [] : lookupResult?.matches?.filter(c => !c.nic?.trim()) || [];
@@ -75,7 +72,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
 
   async function save(e) {
     e.preventDefault();
-    if (saving || !itemsReady || !method || !customerReady) return;
+    if (saving || !itemsReady || !customerReady) return;
     if (!complete(contact)) { setError('Enter a valid NIC, full name and phone number.'); return; }
     setSaving(true); setError('');
     try {
@@ -84,8 +81,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
           email: contact.email, address: contact.address, confirmDifferentPerson: confirmDifferent },
         startDate: businessISO(start), endDate: businessISO(end),
         items: lines.map(({ equipment, quantity }) => ({ equipment, quantity: Number(quantity) })),
-        securityMethod: method, requestId,
-        ...(method === 'money' ? { depositAmount: Number(depositAmount) } : {}),
+        requestId,
         ...(canRecordPayment && +advance > 0 ? { advance: { amount: +advance, method: advanceMethod } } : {})
       } });
       onSaved(saved);
@@ -144,21 +140,6 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
             <button type="button" disabled={!itemsReady || lines.length >= 100 || !items.some(item => item.available > 0 && !lines.some(l => l.equipment === item._id))} onClick={() => setLines(old => [...old, newLine()])}>Add item</button>
             {dates?.items && <p className="new-order-total">Rental total <strong>{lkr(total)}</strong> · {dates.periods} period{dates.periods === 1 ? '' : 's'}</p>}
           </div>
-        </fieldset>
-
-        <fieldset className="new-order-section" disabled={saving}>
-          <legend>Security deposit<Required/></legend>
-          <div className="new-order-grid new-order-security">
-            <label><input required name="order-security" type="radio" value="nic" checked={method === 'nic'} onChange={() => setMethod('nic')} /> NIC</label>
-            <label><input required name="order-security" type="radio" value="money" checked={method === 'money'} onChange={() => setMethod('money')} /> Money</label>
-          </div>
-          {method === 'nic' && <p>Confirm receipt of the physical NIC at pickup.</p>}
-          {method === 'money' && <>
-            <label><span>Security deposit amount (LKR)<Required/></span>
-              <input required type="number" min="0.01" max="1000000000" step="0.01" value={depositAmount} onChange={e => setDepositAmount(e.target.value)} aria-describedby="security-deposit-hint" />
-            </label>
-            <p id="security-deposit-hint">{itemsReady && deposit > 0 ? `Suggested deposit: ${lkr(deposit)}. ` : ''}Enter the refundable amount due at pickup.</p>
-          </>}
         </fieldset>
 
         {canRecordPayment && <details className="new-order-advance"><summary>Rental advance (optional)</summary><div className="new-order-grid">

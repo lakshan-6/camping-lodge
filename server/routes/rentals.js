@@ -19,7 +19,9 @@ r.get('/pickup-preview/:order',requirePermission('rentals.write'),wrap(async(req
  const order=await Order.findById(req.params.order).lean();if(!order||order.deletedAt||order.status!=='reserved')throw httpErr(409,'Choose an uncollected booking');
  const lines=await remainingLines(order._id);
  const items=[];for(const line of lines)items.push({...line,availableUnits:line.equipment.trackUnits?await EquipmentUnit.find({equipment:line.equipment._id,state:'good'}).select('code state').sort({code:1}).lean():[]});
- res.json({securityMethod:order.securityMethod||'money',nicHeld:nicHeld(order),securityHeld:await depositHeld(order._id),depositAmount:order.depositAmount,items});
+ const held=nicHeld(order),securityHeld=await depositHeld(order._id);
+ const method=held?'nic':securityHeld>0?'money':order.securityMethod??null;
+ res.json({securityMethod:method,nicHeld:held,securityHeld,depositAmount:order.depositAmount,items});
 }));
 r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
  let payment, deposit;
@@ -37,7 +39,8 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
   const required=items.flatMap(i=>(i.equipment.checklist||[]).map(part=>`${i.equipment.name}: ${part}`));
   const confirmed=new Set((req.body.checklist||[]).filter(i=>i.checked).map(i=>i.label));
   if(required.some(label=>!confirmed.has(label)))throw httpErr(400,'Confirm all equipment handover checklist items');
-  await chooseSecurity(order,req.body.securityMethod??order.securityMethod??'money',session);
+  const securityPending=!order.securityMethod;
+  await chooseSecurity(order,req.body.securityMethod??order.securityMethod,session);
   if(order.securityMethod==='nic'){
    if(req.body.nicReceived===true)await receiveNic(order,req.user,session);
    if(!nicHeld(order))throw httpErr(400,'Confirm that the customer NIC was physically received');
@@ -45,7 +48,8 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
    if(req.body.securityDeposit?.received===true){
     const amount=Number(req.body.securityDeposit.amount),held=await depositHeld(order._id,session);
     if(!Number.isFinite(amount)||amount<=0)throw httpErr(400,'Enter the money deposit actually received');
-    order.depositAmount=money(Math.max(order.depositAmount||0,held+amount),'Required deposit',true);
+    const totalReceived=held+amount;
+    order.depositAmount=money(securityPending?totalReceived:Math.max(order.depositAmount||0,totalReceived),'Required deposit',true);
     deposit=await recordSecurityDeposit(order,{type:'collect',amount,method:req.body.securityDeposit.method},req.user,session);
    }
    if(await depositHeld(order._id,session)<=0)throw httpErr(409,'Record the money security deposit before handover, or choose NIC security');

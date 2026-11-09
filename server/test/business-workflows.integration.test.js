@@ -51,7 +51,7 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal((await request('/equipment/'+equipment._id,'PUT',{...equipment,totalQuantity:6},staffToken)).status,403);
  });
  await t.test('order/advance are atomic; idempotent retry does not duplicate either',async()=>{
-  const body={customer:customer._id,...dates(),items:[{equipment:equipment._id,quantity:3}],advance:{amount:1000,method:'cash'},requestId:crypto.randomUUID()};
+  const body={customer:customer._id,...dates(),items:[{equipment:equipment._id,quantity:3}],securityMethod:'money',advance:{amount:1000,method:'cash'},requestId:crypto.randomUUID()};
   order=await ok('/orders','POST',body);const retry=await ok('/orders','POST',body);assert.equal(retry._id,order._id);assert.equal(await M.Order.countDocuments(),1);assert.equal(await M.Payment.countDocuments(),1);
   const before=await M.Order.countDocuments();assert.equal((await request('/orders','POST',{...body,advance:{amount:100000},requestId:crypto.randomUUID()})).status,409);assert.equal(await M.Order.countDocuments(),before);
   assert.equal((await request('/orders','POST',{...body,items:[{equipment:equipment._id,quantity:1.5}],advance:{amount:0},requestId:crypto.randomUUID()})).status,400);
@@ -102,7 +102,9 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   const b=await ok('/orders','POST',{customer:customer._id,startDate:new Date(now+3600000).toISOString(),endDate:new Date(now+36*3600000).toISOString(),items:[{equipment:eq._id,quantity:1}],requestId:crypto.randomUUID()});
   assert.equal((await request('/rentals/start','POST',{order:a._id,payBalance:false,sendVia:'none',requestId:crypto.randomUUID()})).status,409);
   await ok(`/orders/${b._id}/cancel`,'PATCH',{action:'pending',reason:'test',requestId:crypto.randomUUID()});
+  assert.equal((await request('/rentals/start','POST',{order:a._id,securityMethod:'nic'})).status,400);
   const started=await ok('/rentals/start','POST',{order:a._id,payBalance:false,sendVia:'none',securityMethod:'nic',nicReceived:true,requestId:crypto.randomUUID()});
+  assert.ok((await M.Order.findById(a._id)).nicHeldAt);
   const next=await ok('/orders','POST',{customer:customer._id,startDate:new Date(+new Date(started.dueDate)+1000).toISOString(),endDate:new Date(+new Date(started.dueDate)+36*3600000).toISOString(),items:[{equipment:eq._id,quantity:1}],requestId:crypto.randomUUID()});
   assert.equal((await request(`/rentals/${started._id}/extend`,'POST',{periods:1,requestId:crypto.randomUUID()})).status,409);
   await ok(`/orders/${next._id}/cancel`,'PATCH',{action:'pending',reason:'test',requestId:crypto.randomUUID()});
@@ -269,8 +271,12 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
 
   process.env.BREVO_API_KEY='test-booking-key';providerStatus=201;requests.length=0;
   const tent=await ok('/equipment','POST',{name:'Lifecycle tent',category:'Camping',totalQuantity:2,periodRate:400,deposit:50});
-  const booking=await ok('/orders','POST',{customer:contact._id,...dates(),items:[{equipment:tent._id,quantity:2}],securityMethod:'money',depositAmount:125,requestId:crypto.randomUUID()});
-  assert.match(requests[0].textContent,/Refundable money deposit: .*125/);
+  const booking=await ok('/orders','POST',{customer:contact._id,...dates(),items:[{equipment:tent._id,quantity:2}],requestId:crypto.randomUUID()});
+  assert.match(requests[0].textContent,/Bring your NIC or a refundable money deposit. Choose at pickup/);
+  const preview=await ok('/rentals/pickup-preview/'+booking._id);
+  assert.equal(preview.securityMethod,null);assert.equal(preview.securityHeld,0);assert.equal(preview.depositAmount,100);
+  assert.equal((await request('/orders/'+booking._id+'/security','POST',{action:'set',method:'money'})).status,409);
+  assert.equal((await request('/payments/deposits','POST',{order:booking._id,type:'collect',amount:50})).status,409);
   const pay={order:booking._id,type:'rental',amount:100,method:'bank_transfer',requestId:crypto.randomUUID()};
   assert.equal((await ok('/payments','POST',pay)).notificationEmail,'accepted');
   assert.equal((await ok('/payments','POST',pay)).notificationEmail,'already_processed');
@@ -279,12 +285,17 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal(refund.notificationEmail,'accepted');assert.match(requests.at(-1).subject,/refund confirmation/);
   assert.doesNotMatch(requests.at(-1).textContent,/Internal refund note/);
 
+  assert.equal((await request('/rentals/start','POST',{order:booking._id})).status,400);
+  assert.equal((await request('/rentals/start','POST',{order:booking._id,securityMethod:'money',securityDeposit:{received:false,amount:50}})).status,409);
+  assert.equal((await ok('/rentals/pickup-preview/'+booking._id)).securityMethod,null);
   const pickup={order:booking._id,payBalance:true,method:'cash',sendVia:'both',securityMethod:'money',securityDeposit:{received:true,amount:50,method:'cash'},requestId:crypto.randomUUID()};
   const rented=await ok('/rentals/start','POST',pickup);
   assert.equal(rented.notificationEmail,'accepted');assert.equal(rented.whatsappInvoice,rented.invoiceId);
   assert.equal((await ok('/rentals/start','POST',pickup)).notificationEmail,'already_processed');
   assert.match(requests.at(-1).textContent,/Rental balance payment: .*725/);
   assert.match(requests.at(-1).textContent,/Security deposit received: .*50/);
+  const collected=await ok('/orders/'+booking._id+'/detail');
+  assert.equal(collected.securityMethod,'money');assert.equal(collected.securityHeld,50);assert.equal(collected.depositAmount,50);
 
   const part={rental:rented._id,items:[{equipment:tent._id,quantityDamaged:1}],damageFee:50,paid:{damage:true},method:'cash',requestId:crypto.randomUUID()};
   const partial=await ok('/returns','POST',part);

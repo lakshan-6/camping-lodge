@@ -2273,15 +2273,13 @@ td[data-actions] {
 .new-order-form textarea { min-height: 64px; }
 .new-order-form .new-order-line { grid-template-columns: minmax(0, 1fr) 82px auto; align-items: end; }
 .new-order-form .new-order-line button { min-height: 43px; }
-.new-order-security label { display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; cursor: pointer; }
-.new-order-security label:has(input:checked) { background: #e6f2e9; border-color: #39835b; }
 .new-order-form .new-order-total strong { color: var(--ink); font-size: 15px; }
 .new-order-advance { color: var(--mute); font-size: 13px; }
 .new-order-advance summary { cursor: pointer; }
 .new-order-advance .new-order-grid { margin-top: 10px; }
 @media (max-width: 540px) {
   .new-order-section { padding: 10px; }
-  .new-order-grid:not(.new-order-security) { grid-template-columns: minmax(0, 1fr); }
+  .new-order-grid { grid-template-columns: minmax(0, 1fr); }
   .new-order-form .new-order-line { grid-template-columns: minmax(0, 1fr) 76px; }
   .new-order-form .new-order-line button { grid-column: 1 / -1; justify-self: start; }
 }
