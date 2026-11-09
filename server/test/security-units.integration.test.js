@@ -33,7 +33,8 @@ test('NIC custody and labelled equipment use real isolated transactions',{timeou
  const other=await M.Customer.create({name:'Money Customer',phone:'0777654321',nic:'200012345678'});
  const date=()=>({startDate:new Date().toISOString(),endDate:new Date(Date.now()+36*3600000).toISOString()});
  let eq,units,order,rental,repair;
- const booking=(quantity=1,securityMethod='nic',cust=customer._id,item=eq._id)=>ok('/orders','POST',{customer:cust,...date(),securityMethod,items:[{equipment:item,quantity}],requestId:crypto.randomUUID()});
+ const advance={amount:1,method:'cash'};
+ const booking=(quantity=1,securityMethod='nic',cust=customer._id,item=eq._id)=>ok('/orders','POST',{customer:cust,...date(),securityMethod,items:[{equipment:item,quantity}],advance,requestId:crypto.randomUUID()});
  const pickup=(o,ids,extra={})=>({order:o._id,securityMethod:o.securityMethod,nicReceived:o.securityMethod==='nic',sendVia:'none',payBalance:false,unitSelections:[{equipment:eq._id,units:ids}],requestId:crypto.randomUUID(),...extra});
  const receipt=(rows,extra={})=>({rental:rental._id,items:[{equipment:eq._id,units:rows}],requestId:crypto.randomUUID(),...extra});
  await t.test('unique permanent labels, initial damaged units and tracked quantity edit guards',async()=>{
@@ -58,7 +59,7 @@ test('NIC custody and labelled equipment use real isolated transactions',{timeou
   assert.equal((await request(`/orders/${order._id}/cancel`,'PATCH',{action:'pending',reason:'Test'})).status,409);
   const duplicate=await booking(1);assert.equal((await request(`/orders/${duplicate._id}/security`,'POST',{action:'receive',confirmed:true})).status,409);await ok(`/orders/${duplicate._id}/cancel`,'PATCH',{action:'pending',reason:'Test complete'});
   const noNic=await M.Customer.create({name:'No NIC',phone:'0771111111'});
-  assert.equal((await request('/orders','POST',{customer:noNic._id,...date(),securityMethod:'money',items:[{equipment:eq._id,quantity:1}]})).status,400);
+  assert.equal((await request('/orders','POST',{customer:noNic._id,...date(),securityMethod:'money',items:[{equipment:eq._id,quantity:1}],advance})).status,400);
   const noNicOrder=await M.Order.create({orderNo:'LEGACY-NO-NIC',customer:noNic._id,...date(),securityMethod:'nic'});
   assert.equal((await request(`/orders/${noNicOrder._id}/security`,'POST',{action:'receive',confirmed:true})).status,409);await ok(`/orders/${noNicOrder._id}/cancel`,'PATCH',{action:'pending',reason:'Test complete'});
   const rollbackNic=await booking(1,'nic',other._id);assert.equal((await request('/rentals/start','POST',pickup(rollbackNic,[units[0]._id]))).status,409);assert.equal((await M.Order.findById(rollbackNic._id)).nicHeldAt,undefined);assert.equal(await M.AuditEvent.countDocuments({action:'security.nic_received',target:rollbackNic._id}),0);await ok(`/orders/${rollbackNic._id}/cancel`,'PATCH',{action:'pending',reason:'Test complete'});

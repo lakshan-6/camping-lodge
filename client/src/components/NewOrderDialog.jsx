@@ -15,7 +15,6 @@ const Required = () => <span aria-hidden="true" className="required-mark"> *</sp
 
 export default function NewOrderDialog({ me, onClose, onSaved }) {
   const canWriteCustomers = can(me, 'customers.write');
-  const canRecordPayment = can(me, 'payments.record');
   const [customer, setCustomer] = useState(emptyCustomer);
   const [lookup, setLookup] = useState(null);
   const [lookupAttempt, setLookupAttempt] = useState(0);
@@ -24,7 +23,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
   const [start, setStart] = useState(''), [end, setEnd] = useState('');
   const [lines, setLines] = useState(() => [newLine()]);
   const [availability, setAvailability] = useState(null);
-  const [advance, setAdvance] = useState(''), [advanceMethod, setAdvanceMethod] = useState('bank_transfer');
+  const [advance, setAdvance] = useState(''), [advanceMethod, setAdvanceMethod] = useState('');
   const [requestId] = useState(() => crypto.randomUUID());
   const [saving, setSaving] = useState(false), [error, setError] = useState('');
 
@@ -56,7 +55,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
   const items = dates?.items || [];
   const chosen = lines.map(line => items.find(i => i._id === line.equipment));
   const itemsReady = !!dates?.items && lines.every((l, i) => chosen[i] && Number.isInteger(+l.quantity) && +l.quantity >= 1 && +l.quantity <= chosen[i].available);
-  const total = chosen.reduce((sum, item, i) => sum + (item ? item.periodRate * (+lines[i].quantity || 0) * dates.periods : 0), 0);
+  const total = Math.round(chosen.reduce((sum, item, i) => sum + (item ? item.periodRate * (+lines[i].quantity || 0) * dates.periods : 0), 0) * 100) / 100;
   const lookupResult = lookup?.key === lookupKey ? lookup : null;
   const existing = lookupResult?.matches?.find(c => c.nic?.toUpperCase() === customer.nic.toUpperCase());
   const incompleteMatches = existing ? [] : lookupResult?.matches?.filter(c => !c.nic?.trim()) || [];
@@ -82,7 +81,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
         startDate: businessISO(start), endDate: businessISO(end),
         items: lines.map(({ equipment, quantity }) => ({ equipment, quantity: Number(quantity) })),
         requestId,
-        ...(canRecordPayment && +advance > 0 ? { advance: { amount: +advance, method: advanceMethod } } : {})
+        advance: { amount: Number(advance), method: advanceMethod }
       } });
       onSaved(saved);
     } catch (e) { setError(e.message); } finally { setSaving(false); }
@@ -142,10 +141,14 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
           </div>
         </fieldset>
 
-        {canRecordPayment && <details className="new-order-advance"><summary>Rental advance (optional)</summary><div className="new-order-grid">
-          <label>Advance paid (LKR)<input disabled={saving} type="number" min="0" step="0.01" value={advance} onChange={e => setAdvance(e.target.value)} /></label>
-          {+advance > 0 && <label>Paid by<select disabled={saving} value={advanceMethod} onChange={e => setAdvanceMethod(e.target.value)}><option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option><option value="card">Card</option><option value="other">Other</option></select></label>}
-        </div></details>}
+        <fieldset className="new-order-section" disabled={saving}>
+          <legend>Rental advance<Required/></legend>
+          <div className="new-order-grid">
+            <label><span>Advance received (LKR)<Required/></span><input required type="number" min="0.01" max={itemsReady ? total : undefined} step="0.01" value={advance} onChange={e => setAdvance(e.target.value)} /></label>
+            <label><span>Payment method<Required/></span><select required value={advanceMethod} onChange={e => setAdvanceMethod(e.target.value)}><option value="">Choose payment method</option><option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option><option value="card">Card</option><option value="other">Other</option></select></label>
+          </div>
+          <p>Enter the rental advance already received. It must be within the rental total.</p>
+        </fieldset>
         {error && <p className="bad" role="alert">{error}</p>}
         <div className="row end"><button type="button" disabled={saving} onClick={close}>Cancel</button><button className="btn" disabled={saving || !itemsReady || !customerReady}>{saving ? 'Saving…' : 'Create order'}</button></div>
       </form>

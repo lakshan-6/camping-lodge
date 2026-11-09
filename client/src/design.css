@@ -2274,9 +2274,6 @@ td[data-actions] {
 .new-order-form .new-order-line { grid-template-columns: minmax(0, 1fr) 82px auto; align-items: end; }
 .new-order-form .new-order-line button { min-height: 43px; }
 .new-order-form .new-order-total strong { color: var(--ink); font-size: 15px; }
-.new-order-advance { color: var(--mute); font-size: 13px; }
-.new-order-advance summary { cursor: pointer; }
-.new-order-advance .new-order-grid { margin-top: 10px; }
 @media (max-width: 540px) {
   .new-order-section { padding: 10px; }
   .new-order-grid { grid-template-columns: minmax(0, 1fr); }

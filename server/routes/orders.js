@@ -5,7 +5,7 @@ import { Order, OrderItem, Customer, Payment, Invoice } from '../models/index.js
 import { httpErr } from '../utils/availability.js';
 import { nextDocumentNumber } from '../utils/documentNumbers.js';
 import { previewOrderDeletion, permanentlyDeleteOrder } from '../utils/orderDeletion.js';
-import { mutate, audit, money, methodOf } from '../utils/operations.js';
+import { mutate, audit, money, PAYMENT_METHODS } from '../utils/operations.js';
 import { requirePermission, assertPermission, can } from '../utils/permissions.js';
 import { priceItems, paidTotal, recordPayment, syncInvoice, depositHeld } from '../utils/finance.js';
 import {dayRange} from '../utils/businessTime.js';
@@ -32,6 +32,11 @@ r.get('/',wrap(async(req,res)=>{
 }));
 r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
   const result=await mutate(req,'order.create',async session=>{
+    if(!can(req.user,'payments.record'))throw httpErr(403,'Payment recording permission is required to create a booking');
+    const advance=req.body.advance;
+    if(typeof advance?.amount!=='number'&&typeof advance?.amount!=='string')throw httpErr(400,'Enter the rental advance received');
+    const advanceAmount=money(advance.amount,'Rental advance');
+    if(!PAYMENT_METHODS.includes(advance.method))throw httpErr(400,'Choose how the rental advance was paid');
     const requestedMethod=req.body.securityMethod??(req.body.depositAmount!==undefined?'money':null);
     const method=requestedMethod===null?null:securityMethod(requestedMethod);
     let depositAmount;
@@ -49,9 +54,10 @@ r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
       bookingContact(customer);
     }
     const p=await priceItems(req.body,session);
+    if(advanceAmount>p.total)throw httpErr(409,'Rental advance cannot exceed the rental total');
     const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:customer._id,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:depositAmount??p.deposit,securityMethod:method,notes:req.body.notes}],{session});
     await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
-    if(Number(req.body.advance?.amount)>0)await recordPayment(order,{...req.body.advance,type:'deposit'},req.user,session);
+    await recordPayment(order,{type:'deposit',amount:advanceAmount,method:advance.method,reference:advance.reference,reason:advance.reason},req.user,session);
     await audit(session,req.user,'order.created',order._id,null,order);return order;
   });
   const bookingEmail = result._replayed ? 'already_processed' : await sendBookingConfirmation(result._id);

@@ -40,4 +40,5 @@ export function money(value, label = 'Amount', allowZero = false) {
 export function units(value, allowZero = false) {
   const n = Number(value); if (!Number.isSafeInteger(n) || n < (allowZero ? 0 : 1) || n > 1000000) throw httpErr(400, 'Quantity must be a whole number'); return n;
 }
-export const methodOf = value => ['cash','bank_transfer','card','other'].includes(value) ? value : 'cash';
+export const PAYMENT_METHODS = ['cash','bank_transfer','card','other'];
+export const methodOf = value => PAYMENT_METHODS.includes(value) ? value : 'cash';
