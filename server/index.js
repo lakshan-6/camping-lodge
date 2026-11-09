@@ -84,6 +84,7 @@ async function openDatabase() {
   if (!localDatabase) return connectDatabase();
   // Development data stays on this machine, with no cloud backups or outgoing email.
   delete process.env.SMTP_HOST;
+  delete process.env.BREVO_API_KEY;
   for (const key of Object.keys(process.env)) if (key.startsWith('BACKUP_S3_')) delete process.env[key];
   const { PGlite } = await import('@electric-sql/pglite');
   await connectTestDatabase(new PGlite(fileURLToPath(new URL('./.local-postgres', import.meta.url))));

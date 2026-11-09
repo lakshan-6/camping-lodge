@@ -11,6 +11,7 @@ import { priceItems, paidTotal, recordPayment, syncInvoice, depositHeld } from '
 import {dayRange} from '../utils/businessTime.js';
 import {securityMethod,chooseSecurity,receiveNic,releaseNic,nicHeld} from '../utils/securityDeposit.js';
 import {bookingContact,resolveBookingCustomer} from '../utils/customers.js';
+import {sendBookingConfirmation} from '../utils/bookingEmail.js';
 const r=Router(), wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const ownerOnly=(req,res,next)=>req.user?.role==='owner'?next():next(httpErr(403,'Only the owner can delete past orders'));
 const limit=rateLimit({windowMs:15*60*1000,limit:5,keyGenerator:req=>String(req.user._id),standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many deletion attempts. Try again in 15 minutes.'}});
@@ -45,7 +46,9 @@ r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
     await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
     if(Number(req.body.advance?.amount)>0)await recordPayment(order,{...req.body.advance,type:'deposit'},req.user,session);
     await audit(session,req.user,'order.created',order._id,null,order);return order;
-  });res.status(201).json(result);
+  });
+  const bookingEmail = result._replayed ? 'already_processed' : await sendBookingConfirmation(result._id);
+  res.status(201).json({...result, bookingEmail});
 }));
 r.put('/:id',requirePermission('orders.write'),wrap(async(req,res)=>{
   res.json(await mutate(req,'order.edit:'+req.params.id,async session=>{

@@ -78,7 +78,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
     if (!complete(contact)) { setError('Enter a valid NIC, full name and phone number.'); return; }
     setSaving(true); setError('');
     try {
-      await api('/orders', { method: 'POST', body: {
+      const saved = await api('/orders', { method: 'POST', body: {
         customerDetails: { nic: customer.nic, name: contact.name, phone: contact.phone,
           email: contact.email, address: contact.address, confirmDifferentPerson: confirmDifferent },
         startDate: businessISO(start), endDate: businessISO(end),
@@ -86,7 +86,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
         securityMethod: method, requestId,
         ...(canRecordPayment && +advance > 0 ? { advance: { amount: +advance, method: advanceMethod } } : {})
       } });
-      onSaved();
+      onSaved(saved);
     } catch (e) { setError(e.message); } finally { setSaving(false); }
   }
 

@@ -10,10 +10,19 @@ import {PageIntro,EmptyState} from '../components/UI.jsx';
 import Icon from '../components/Icon.jsx';
 
 const fmt = d => new Date(d).toLocaleString('en-LK', { timeZone:'Asia/Colombo', dateStyle: 'medium', timeStyle: 'short' });
+const emailNotes = {
+  accepted: 'The booking confirmation was sent for delivery.',
+  no_email: 'No confirmation email was sent because this customer has no email address.',
+  invalid_email: 'No confirmation email was sent because the customer’s email address is invalid.',
+  not_configured: 'Confirmation email is not set up yet.',
+  failed: 'Email delivery could not be confirmed. Check the sending account before sending again.',
+  already_processed: 'This booking was already saved. No duplicate email was sent.',
+};
 
 export default function Orders({ me }) {
   const [orders, setOrders] = useState([]);
   const [creating, setCreating] = useState(false);
+  const [bookingNotice, setBookingNotice] = useState('');
   const [details, setDetails] = useState(null);
   const [editing, setEditing] = useState(null);
   const [err, setErr] = useState('');
@@ -63,11 +72,12 @@ export default function Orders({ me }) {
   return (
     <>
       <PageIntro eyebrow="Bookings & rentals" title="The next adventure starts here." description="Create bookings, find an existing order and keep every pickup and return on schedule."/>
-      <div className="bar">{can(me,'orders.write')&&<button className="btn" onClick={() => { setErr(''); setCreating(true); }}><Icon name="plus" size={17}/>New order</button>}
+      <div className="bar">{can(me,'orders.write')&&<button className="btn" onClick={() => { setErr(''); setBookingNotice(''); setCreating(true); }}><Icon name="plus" size={17}/>New order</button>}
         {me?.role === 'owner' && <label className="check"><input type="checkbox" checked={showDeleted} onChange={e => {setShowDeleted(e.target.checked);setStatus('');setPage(1);}} /> Previously hidden past orders</label>}
       </div>
       <div className="bar filter-panel"><label>Search orders<input type="search" placeholder="Order no., customer, phone or NIC" maxLength={80} value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}/></label><label>Status<select value={status} disabled={showDeleted} onChange={e=>{setStatus(e.target.value);setPage(1);}}><option value="">All statuses</option>{['reserved','active','completed','cancelled'].map(s=><option key={s} value={s}>{s}</option>)}</select></label><label>Pickup from<input type="date" value={from} onChange={e=>{setFrom(e.target.value);setPage(1);}}/></label><label>Pickup to<input type="date" value={to} onChange={e=>{setTo(e.target.value);setPage(1);}}/></label><button onClick={()=>{setSearch('');setStatus('');setFrom('');setTo('');setPage(1);}}>Clear filters</button></div>
       {err && !creating && <p className="bad">{err}</p>}
+      {bookingNotice && <div className="notice" role="status">{bookingNotice}</div>}
       {loading&&<p role="status">Loading orders…</p>}
       {orders.length === 0 ? <EmptyState title={loading?'Loading your orders…':'No matching orders'} description="Adjust the filters or create a new order to get started."/> : (
         <div className="tablewrap"><ResponsiveTable>
@@ -108,7 +118,7 @@ export default function Orders({ me }) {
           </form>
         </div>
       )}
-      {creating && <NewOrderDialog me={me} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); setPage(1); load(); }} />}
+      {creating && <NewOrderDialog me={me} onClose={() => setCreating(false)} onSaved={saved => { setBookingNotice(`${saved.orderNo} saved. ${emailNotes[saved.bookingEmail] || ''}`.trim()); setCreating(false); setPage(1); load(); }} />}
     </>
   );
 }
