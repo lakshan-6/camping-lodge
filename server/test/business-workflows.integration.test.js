@@ -204,6 +204,28 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   const separate=await ok('/orders','POST',{...newPerson,customerDetails:{...newPerson.customerDetails,confirmDifferentPerson:true}});
   assert.notEqual(separate.customer,legacy._id);assert.equal((await M.Customer.findById(legacy._id)).nic,undefined);
  });
+ await t.test('custom money deposit stays due until collected and survives booking edits',async()=>{
+  const gear=await ok('/equipment','POST',{name:'Deposit test tent',category:'Camping',totalQuantity:2,periodRate:400,deposit:50});
+  const body={customer:customer._id,...dates(),items:[{equipment:gear._id,quantity:1}],securityMethod:'money'};
+  for(const depositAmount of [0,-10,1.001,null,'100',true,1000000001]){
+   assert.equal((await request('/orders','POST',{...body,depositAmount})).status,400);
+  }
+  assert.equal((await request('/orders','POST',{...body,securityMethod:'nic',depositAmount:100})).status,400);
+  const booking=await ok('/orders','POST',{...body,depositAmount:1000.30,requestId:crypto.randomUUID()});
+  assert.equal(booking.depositAmount,1000.30);
+  assert.equal(booking.totalAmount,400);
+  const edited=await ok('/orders/'+booking._id,'PUT',{items:[{equipment:gear._id,quantity:2}]});
+  assert.equal(edited.depositAmount,1000.30);
+  const preview='/rentals/pickup-preview/'+booking._id;
+  assert.equal((await ok(preview)).depositAmount,1000.30);
+  assert.equal((await ok(preview)).securityHeld,0);
+  const pickup={order:booking._id,securityMethod:'money',sendVia:'none'};
+  assert.equal((await request('/rentals/start','POST',pickup)).status,409);
+  await ok('/payments/deposits','POST',{order:booking._id,type:'collect',amount:1000.10,method:'cash'});
+  assert.equal((await ok(preview)).securityHeld,1000.10);
+  await ok('/rentals/start','POST',{...pickup,securityDeposit:{received:true,amount:0.20,method:'cash'}});
+  assert.equal((await ok('/payments/deposits/'+booking._id)).held,1000.30);
+ });
  await t.test('booking confirmation sends only after save, skips duplicates, and never rolls back an order',async mailTest=>{
   const gear=await ok('/equipment','POST',{name:'<Tent & Lamp>',category:'Lighting',totalQuantity:5,periodRate:800,deposit:500});
   const contact=await M.Customer.create({name:'Pat <Example>',phone:'0776969696',nic:'200500112233',email:'recipient@example.test',address:'Private customer address'});
@@ -247,7 +269,8 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
 
   process.env.BREVO_API_KEY='test-booking-key';providerStatus=201;requests.length=0;
   const tent=await ok('/equipment','POST',{name:'Lifecycle tent',category:'Camping',totalQuantity:2,periodRate:400,deposit:50});
-  const booking=await ok('/orders','POST',{customer:contact._id,...dates(),items:[{equipment:tent._id,quantity:2}],securityMethod:'money',requestId:crypto.randomUUID()});
+  const booking=await ok('/orders','POST',{customer:contact._id,...dates(),items:[{equipment:tent._id,quantity:2}],securityMethod:'money',depositAmount:125,requestId:crypto.randomUUID()});
+  assert.match(requests[0].textContent,/Refundable money deposit: .*125/);
   const pay={order:booking._id,type:'rental',amount:100,method:'bank_transfer',requestId:crypto.randomUUID()};
   assert.equal((await ok('/payments','POST',pay)).notificationEmail,'accepted');
   assert.equal((await ok('/payments','POST',pay)).notificationEmail,'already_processed');

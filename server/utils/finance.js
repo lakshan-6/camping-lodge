@@ -17,7 +17,7 @@ export async function recordSecurityDeposit(order,body,user,session){
   assertPermission(user,type==='collect'?'payments.record':'payments.refund');
   const amount=money(body.amount),held=await depositHeld(order._id,session);
   if(type==='collect'&&(order.securityMethod==='nic'||(order.nicHeldAt&&!order.nicReturnedAt)))throw httpErr(409,'This order uses NIC security. Return any held NIC and choose money security before collecting a deposit.');
-  if(type==='collect'&&(order.status==='cancelled'||amount>Math.max(0,order.depositAmount-held)))throw httpErr(409,'Deposit collection exceeds the required deposit or this booking is cancelled');
+  if(type==='collect'&&(order.status==='cancelled'||Math.round(amount*100)>Math.round((order.depositAmount-held)*100)))throw httpErr(409,'Deposit collection exceeds the required deposit or this booking is cancelled');
   if(type!=='collect'&&amount>held)throw httpErr(409,'Amount exceeds the held security deposit');
   if(type!=='collect'&&!body.reason?.trim())throw httpErr(400,'Enter a reason');
   if(type==='apply')await recordPayment(order,{amount,type:'balance',method:'other',reference:'Applied security deposit',reason:body.reason},{...user,role:user.role,permissions:[...(user.permissions||[]),'payments.record']},session);

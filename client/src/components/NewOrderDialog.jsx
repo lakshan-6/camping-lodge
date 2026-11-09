@@ -25,6 +25,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
   const [lines, setLines] = useState(() => [newLine()]);
   const [availability, setAvailability] = useState(null);
   const [method, setMethod] = useState('');
+  const [depositAmount, setDepositAmount] = useState('');
   const [advance, setAdvance] = useState(''), [advanceMethod, setAdvanceMethod] = useState('bank_transfer');
   const [requestId] = useState(() => crypto.randomUUID());
   const [saving, setSaving] = useState(false), [error, setError] = useState('');
@@ -84,6 +85,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
         startDate: businessISO(start), endDate: businessISO(end),
         items: lines.map(({ equipment, quantity }) => ({ equipment, quantity: Number(quantity) })),
         securityMethod: method, requestId,
+        ...(method === 'money' ? { depositAmount: Number(depositAmount) } : {}),
         ...(canRecordPayment && +advance > 0 ? { advance: { amount: +advance, method: advanceMethod } } : {})
       } });
       onSaved(saved);
@@ -151,7 +153,12 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
             <label><input required name="order-security" type="radio" value="money" checked={method === 'money'} onChange={() => setMethod('money')} /> Money</label>
           </div>
           {method === 'nic' && <p>Confirm receipt of the physical NIC at pickup.</p>}
-          {method === 'money' && <p>{itemsReady ? `Refundable deposit: ${lkr(deposit)}. ` : ''}Record money actually received at pickup.</p>}
+          {method === 'money' && <>
+            <label><span>Security deposit amount (LKR)<Required/></span>
+              <input required type="number" min="0.01" max="1000000000" step="0.01" value={depositAmount} onChange={e => setDepositAmount(e.target.value)} aria-describedby="security-deposit-hint" />
+            </label>
+            <p id="security-deposit-hint">{itemsReady && deposit > 0 ? `Suggested deposit: ${lkr(deposit)}. ` : ''}Enter the refundable amount due at pickup.</p>
+          </>}
         </fieldset>
 
         {canRecordPayment && <details className="new-order-advance"><summary>Rental advance (optional)</summary><div className="new-order-grid">

@@ -32,6 +32,12 @@ r.get('/',wrap(async(req,res)=>{
 }));
 r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
   const result=await mutate(req,'order.create',async session=>{
+    const method=securityMethod(req.body.securityMethod??'money');
+    let depositAmount;
+    if(req.body.depositAmount!==undefined){
+      if(method!=='money'||typeof req.body.depositAmount!=='number')throw httpErr(400,'Enter a money security deposit amount');
+      depositAmount=money(req.body.depositAmount,'Security deposit');
+    }
     let customer;
     if(req.body.customerDetails!==undefined){
       if(req.body.customer||!req.body.customerDetails||typeof req.body.customerDetails!=='object'||Array.isArray(req.body.customerDetails))throw httpErr(400,'Choose an existing customer or enter new customer details');
@@ -42,7 +48,7 @@ r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
       bookingContact(customer);
     }
     const p=await priceItems(req.body,session);
-    const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:customer._id,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:p.deposit,securityMethod:securityMethod(req.body.securityMethod??'money'),notes:req.body.notes}],{session});
+    const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:customer._id,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:depositAmount??p.deposit,securityMethod:method,notes:req.body.notes}],{session});
     await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
     if(Number(req.body.advance?.amount)>0)await recordPayment(order,{...req.body.advance,type:'deposit'},req.user,session);
     await audit(session,req.user,'order.created',order._id,null,order);return order;
@@ -57,7 +63,8 @@ r.put('/:id',requirePermission('orders.write'),wrap(async(req,res)=>{
     if(order.status!=='reserved')throw httpErr(409,'Only uncollected bookings can be edited');
     const before=order.toObject();const p=await priceItems({startDate:req.body.startDate||order.startDate,endDate:req.body.endDate||order.endDate,items:req.body.items},session,order._id);
     await OrderItem.deleteMany({order:order._id},{session});await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
-    order.set({startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:p.deposit});await order.save({session});
+    const depositAmount=order.securityMethod==='nic'?p.deposit:order.depositAmount??p.deposit;
+    order.set({startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount});await order.save({session});
     await syncInvoice(order,session);await audit(session,req.user,'order.edited',order._id,before,order);return order;
   }));
 }));
