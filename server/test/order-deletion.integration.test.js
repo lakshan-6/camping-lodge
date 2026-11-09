@@ -1,39 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import mongoose from 'mongoose';
-import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, dirname, resolve, basename } from 'node:path';
-import net from 'node:net';
-import { once } from 'node:events';
+import {testDatabase} from './helpers/database.js';
 import { Customer, Equipment, Order, OrderItem, Rental, Return, ReturnItem, Invoice, Payment, InventoryTransaction } from '../models/index.js';
 import { permanentlyDeleteOrder, previewOrderDeletion, withOrderLock } from '../utils/orderDeletion.js';
 import { initializeDocumentNumbers, nextDocumentNumber } from '../utils/documentNumbers.js';
 
-const binary = process.env.TEST_MONGOD_PATH;
-test('real MongoDB replica-set deletion, rollback and document numbering', { skip: !binary, timeout: 60000 }, async t => {
-  const temp = await mkdtemp(join(tmpdir(), 'camping-lodge-db-test-'));
-  const listener = net.createServer(); listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
-  const port = listener.address().port; await new Promise(resolve => listener.close(resolve));
-  const child = spawn(binary, ['--dbpath', temp, '--port', String(port), '--bind_ip', '127.0.0.1', '--replSet', 'codexTest', '--logpath', join(temp, 'mongod.log')], { windowsHide: true, stdio: 'ignore' });
-  let spawnError; child.on('error', e => { spawnError = e; });
-  const uri = `mongodb://127.0.0.1:${port}/deletion_test?directConnection=true`;
-  const client = new mongoose.mongo.MongoClient(uri, { serverSelectionTimeoutMS: 500 });
-  try {
-    let ready = false;
-    for (let n = 0; n < 100; n++) {
-      if (spawnError) throw spawnError;
-      try { await client.connect(); ready = true; break; } catch { await new Promise(resolve => setTimeout(resolve, 100)); }
-    }
-    assert.ok(ready, 'temporary mongod must start');
-    await client.db('admin').command({ replSetInitiate: { _id: 'codexTest', members: [{ _id: 0, host: `127.0.0.1:${port}` }] } });
-    for (let n = 0; n < 100; n++) {
-      if ((await client.db('admin').command({ hello: 1 })).isWritablePrimary) break;
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    await mongoose.connect(uri);
-    await Promise.all(Object.values(mongoose.models).map(model => model.init()));
+test('PostgreSQL deletion, rollback and document numbering', {timeout:60000}, async t=>{
+ const cleanup=await testDatabase();t.after(cleanup);
     const customer = await Customer.create({ name: 'Test', phone: '0771234567' });
     const equipment = await Equipment.create({ name: 'Tent', category: 'Tents', periodRate: 2000, totalQuantity: 10, damagedQty: 1 });
     const create = async (orderNo, invoiceNo, amount) => {
@@ -90,11 +63,4 @@ test('real MongoDB replica-set deletion, rollback and document numbering', { ski
       assert.deepEqual(events, ['delete', 'other']); release(); await Promise.all([first, second]);
       assert.deepEqual(events, ['delete', 'other', 'deleted', 'payment']);
     });
-  } finally {
-    await mongoose.disconnect(); await client.close();
-    child.kill(); if (child.exitCode === null) await once(child, 'exit');
-    const absolute = resolve(temp);
-    if (dirname(absolute) !== resolve(tmpdir()) || !basename(absolute).startsWith('camping-lodge-db-test-')) throw new Error('Unexpected test data path');
-    await rm(absolute, { recursive: true, force: true });
-  }
 });

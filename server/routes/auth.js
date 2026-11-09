@@ -33,15 +33,10 @@ r.post('/setup', limit, globalLimit, wrap(async (req, res) => {
   identity(req.body);
   const { name, username, password } = req.body;
   const passwordHash = await hashPassword(password);
-  // MongoDB's unique _id arbitrates setup across concurrent requests and server processes.
-  const locks = User.db.collection('bootstrap_locks');
-  try { await locks.insertOne({ _id: 'owner-setup' }); }
-  catch (e) { if (e.code === 11000) throw httpErr(409, 'Setup is already complete or in progress'); throw e; }
-  let u;
-  try {
-    if (await User.countDocuments()) throw httpErr(403, 'Setup is already done');
-    u = await User.create({ name, username, passwordHash, role: 'owner' });
-  } catch (e) { await locks.deleteOne({ _id: 'owner-setup' }); throw e; }
+  const u=await exclusive(()=>transaction(async session=>{
+    if(await User.countDocuments().session(session))throw httpErr(409,'Setup is already complete or in progress');
+    return (await User.create([{name,username,passwordHash,role:'owner'}],{session}))[0];
+  }));
   res.status(201).json({ token: sign(u), user: pub(u) });
 }));
 r.post('/login', limit, globalLimit, wrap(async (req, res) => {

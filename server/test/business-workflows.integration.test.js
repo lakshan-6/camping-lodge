@@ -21,7 +21,7 @@ import backups from '../routes/backups.js';
 import users from '../routes/users.js';
 import {createBackup,backupEnvelope,decryptSnapshot} from '../utils/backups.js';
 process.env.AUTH_SECRET=crypto.randomBytes(32).toString('hex');process.env.PAST_ORDER_DELETE_KEY='WorkflowKey123@@';process.env.BACKUP_ENCRYPTION_KEY=crypto.randomBytes(32).toString('hex');
-test('business workflows against an isolated real MongoDB replica set',{skip:!process.env.TEST_MONGOD_PATH,timeout:120000},async t=>{
+test('business workflows against an isolated PostgreSQL database',{timeout:120000},async t=>{
  const cleanup=await testDatabase();t.after(cleanup);await initializeDocumentNumbers();await getSettings();
  const passwordHash=await hashPassword('workflow-test-password');
  const owner=await M.User.create({name:'Owner',username:'owner',passwordHash,role:'owner',lastSeenAt:new Date()});
@@ -144,9 +144,10 @@ test('business workflows against an isolated real MongoDB replica set',{skip:!pr
   const hidden=await M.Order.create({orderNo:'DELETE-GUARD',customer:guarded._id,...dates(),status:'cancelled',deletedAt:new Date()});
   assert.equal((await ok(guardPath+'/delete-preview')).orders,1);assert.equal((await request(guardPath,'DELETE',{})).status,409);
   await M.Order.deleteOne({_id:hidden._id});
-  const invoice=await M.Invoice.create({invoiceNo:'DELETE-GUARD',order:hidden._id,customer:guarded._id});
+  await assert.rejects(()=>M.Invoice.create({invoiceNo:'ORPHAN-GUARD',order:hidden._id,customer:guarded._id}),e=>e.code==='23503');
+  const invoice=await M.Invoice.create({invoiceNo:'DELETE-GUARD',order:order._id,customer:guarded._id});
   assert.equal((await ok(guardPath+'/delete-preview')).invoices,1);assert.equal((await request(guardPath,'DELETE',{})).status,409);await M.Invoice.deleteOne({_id:invoice._id});
-  const rental=await M.Rental.create({order:hidden._id,customer:guarded._id,dueDate:new Date(),status:'returned'});
+  const rental=await M.Rental.create({order:order._id,customer:guarded._id,dueDate:new Date(),status:'returned'});
   assert.equal((await ok(guardPath+'/delete-preview')).rentals,1);assert.equal((await request(guardPath,'DELETE',{})).status,409);await M.Rental.deleteOne({_id:rental._id});
   await ok('/users/'+staff._id,'PATCH',{permissions:['customers.write','customers.delete']});
   assert.equal((await ok(guardPath,'DELETE',{},staffToken)).deleted,true);

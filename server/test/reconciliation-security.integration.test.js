@@ -17,7 +17,7 @@ import backups from '../routes/backups.js';
 import users from '../routes/users.js';
 process.env.AUTH_SECRET=crypto.randomBytes(32).toString('hex');process.env.BACKUP_ENCRYPTION_KEY=crypto.randomBytes(32).toString('hex');process.env.PAST_ORDER_DELETE_KEY='RestoreTestKey123!';
 for(const key of Object.keys(process.env))if(key.startsWith('BACKUP_S3_'))delete process.env[key];
-test('reconciliation, search, owner recovery and MFA use isolated real transactions',{skip:!process.env.TEST_MONGOD_PATH,timeout:120000},async t=>{
+test('reconciliation, search, owner recovery and MFA use isolated real transactions',{timeout:120000},async t=>{
  const cleanup=await testDatabase();t.after(cleanup);
  const password='OwnerPassword123!',owner=await M.User.create({username:'owner',name:'Owner',role:'owner',passwordHash:await hashPassword(password)}),staff=await M.User.create({username:'staff',name:'Staff',role:'staff',passwordHash:owner.passwordHash});
  let token=sign(owner);const staffToken=sign(staff);

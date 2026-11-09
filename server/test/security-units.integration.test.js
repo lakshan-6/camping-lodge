@@ -19,7 +19,7 @@ process.env.AUTH_SECRET=crypto.randomBytes(32).toString('hex');
 process.env.BACKUP_ENCRYPTION_KEY=crypto.randomBytes(32).toString('hex');
 process.env.PAST_ORDER_DELETE_KEY='UnitTestRestore123!';
 
-test('NIC custody and labelled equipment use real isolated transactions',{skip:!process.env.TEST_MONGOD_PATH,timeout:120000},async t=>{
+test('NIC custody and labelled equipment use real isolated transactions',{timeout:120000},async t=>{
  const cleanup=await testDatabase();t.after(cleanup);await initializeDocumentNumbers();
  const owner=await M.User.create({name:'Owner',username:'unit_owner',passwordHash:'unused',role:'owner'});
  const staff=await M.User.create({name:'Staff',username:'unit_staff',passwordHash:'unused',role:'staff'});

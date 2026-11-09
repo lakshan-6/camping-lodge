@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import {database} from '../db/connection.js';
 import { Order, OrderItem, Payment, Invoice, Rental, Return, ReturnItem, InventoryTransaction, DepositTransaction, Mutation } from '../models/index.js';
 import { httpErr } from './availability.js';
 import { exclusive, audit } from './operations.js';
@@ -46,7 +46,7 @@ export async function previewOrderDeletion(id) {
 
 export async function permanentlyDeleteOrder(id, confirmation, user) {
   return exclusive(() => withOrderLock(id, async () => {
-    const session = await mongoose.startSession();
+    const session = await database.startSession();
     try {
       return await session.withTransaction(async () => {
         const data = await relatedRecords(id, session);
@@ -67,8 +67,6 @@ export async function permanentlyDeleteOrder(id, confirmation, user) {
         return data.summary;
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
     } catch (e) {
-      if (e.code === 20 || e.codeName === 'IllegalOperation')
-        throw httpErr(503, 'Permanent deletion requires a MongoDB replica set, such as MongoDB Atlas. No records were deleted.');
       throw e;
     } finally { await session.endSession(); }
   }));

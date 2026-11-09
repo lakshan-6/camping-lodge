@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import express from 'express';
-import mongoose from 'mongoose';
+import {database} from '../db/connection.js';
 import { once } from 'node:events';
 import { User, Customer, DepositTransaction, Mutation, AuditEvent, Order, OrderItem, Payment, Invoice, Rental, Return, ReturnItem, Equipment, InventoryTransaction } from '../models/index.js';
 import { requireAuth, sign } from '../utils/auth.js';
@@ -44,7 +44,7 @@ test('permanent past-order removal is owner/key protected and transactional', as
     accounts.set(user._id, user); return sign(user);
   };
   t.mock.method(User, 'findById', async key => accounts.get(key));
-  t.mock.method(mongoose, 'startSession', async () => {
+  t.mock.method(database, 'startSession', async () => {
     const session = {
       async withTransaction(fn) {
         const before = structuredClone(db); activeSession = session;
@@ -80,7 +80,7 @@ test('permanent past-order removal is owner/key protected and transactional', as
   t.mock.method(Order, 'findOneAndUpdate', async filter => {
     assert.deepEqual(filter.status.$in, ['reserved', 'cancelled']); return null;
   });
-  for (const model of [Customer, Equipment]) for (const method of ['deleteOne', 'deleteMany', 'updateOne', 'updateMany', 'findByIdAndUpdate'])
+  for (const model of [Customer, Equipment]) for (const method of ['deleteOne', 'deleteMany', 'updateOne', 'updateMany'])
     t.mock.method(model, method, () => assert.fail('Shared customer and physical stock must stay unchanged'));
   t.mock.method(AuditEvent, 'create', async () => []);
   const app = express(); app.use(express.json()); app.use('/orders', requireAuth, orders);

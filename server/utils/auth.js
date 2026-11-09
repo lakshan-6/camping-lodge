@@ -42,7 +42,7 @@ export async function requireAuth(req, res, next) {
     if (!u || !u.active) throw httpErr(401, 'Account disabled');
     if (d.session !== session(u)) throw httpErr(401, 'Please log in again');
     req.user = u;
-    if (!u.lastSeenAt || Date.now() - u.lastSeenAt > 30000) User.updateOne({ _id: u._id }, { lastSeenAt: new Date() }).catch(() => {});
+    if (!u.lastSeenAt || Date.now() - u.lastSeenAt > 30000) await User.updateOne({ _id: u._id }, { lastSeenAt: new Date() }).catch(() => {});
     next();
   } catch (e) { next(e.status ? e : httpErr(401, 'Please log in')); }
 }

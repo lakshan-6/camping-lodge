@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { gzipSync,gunzipSync } from 'node:zlib';
-import mongoose from 'mongoose';
+import {EJSON} from 'bson';
 import * as models from '../models/index.js';
 import { transaction,exclusive,audit } from './operations.js';
 import { httpErr } from './availability.js';
@@ -8,10 +8,10 @@ import { localDate } from './businessTime.js';
 import {securityFields,openSecret} from './mfa.js';
 import {externalStatus,externalConfig,uploadAndReadBack} from './externalBackups.js';
 import {validateUnitBackup} from './unitBackup.js';
-const EJSON=mongoose.mongo.BSON.EJSON;
+import {normalize} from '../db/repository.js';
 const collections=Object.entries(models).filter(([name])=>name!=='Backup');
 function key(){const raw=process.env.BACKUP_ENCRYPTION_KEY;if(!raw||raw.length<32)throw httpErr(503,'Backups need BACKUP_ENCRYPTION_KEY in the server environment (32 or more characters).');return crypto.createHash('sha256').update(raw).digest();}
-export function encryptSnapshot(data){const plain=Buffer.from(EJSON.stringify(data));if(plain.length>32*1024*1024)throw httpErr(413,'Backup exceeds the 32 MB uncompressed snapshot limit. Configure external backups before growing further.');const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',key(),iv),payload=Buffer.concat([cipher.update(gzipSync(plain)),cipher.final()]);if(payload.length>8*1024*1024)throw httpErr(413,'Backup exceeds the 8 MB snapshot limit. Export data and configure external backups before growing further.');return {payload,iv,tag:cipher.getAuthTag(),size:payload.length};}
+export function encryptSnapshot(data){const plain=Buffer.from(EJSON.stringify(normalize(data)));if(plain.length>32*1024*1024)throw httpErr(413,'Backup exceeds the 32 MB uncompressed snapshot limit. Configure external backups before growing further.');const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',key(),iv),payload=Buffer.concat([cipher.update(gzipSync(plain)),cipher.final()]);if(payload.length>8*1024*1024)throw httpErr(413,'Backup exceeds the 8 MB snapshot limit. Export data and configure external backups before growing further.');return {payload,iv,tag:cipher.getAuthTag(),size:payload.length};}
 export function backupEnvelope(row){return {format:'camping-lodge-encrypted-v1',iv:row.iv.toString('base64'),tag:row.tag.toString('base64'),data:row.payload.toString('base64')};}
 export function decryptSnapshot(envelope){try{if(envelope.format!=='camping-lodge-encrypted-v1'||typeof envelope.data!=='string'||envelope.data.length>12*1024*1024)throw new Error();const decipher=crypto.createDecipheriv('aes-256-gcm',key(),Buffer.from(envelope.iv,'base64'));decipher.setAuthTag(Buffer.from(envelope.tag,'base64'));const plain=Buffer.concat([decipher.update(Buffer.from(envelope.data,'base64')),decipher.final()]);return EJSON.parse(gunzipSync(plain,{maxOutputLength:32*1024*1024}).toString());}catch(e){if(e.status===503)throw e;throw httpErr(400,'Backup is invalid, damaged, or encrypted with a different key');}}
 async function snapshot(session){const data={version:1,createdAt:new Date(),collections:{}};for(const [name,model]of collections){let query=model.find().session(session);if(name==='User')query=query.select(securityFields);data.collections[name]=await query.lean();}return data;}

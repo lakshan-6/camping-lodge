@@ -6,7 +6,7 @@ import {initializeDocumentNumbers} from '../utils/documentNumbers.js';
 import {serveClient} from '../utils/production.js';
 import auth from '../routes/auth.js';import customers from '../routes/customers.js';import equipment from '../routes/equipment.js';import orders from '../routes/orders.js';import rentals from '../routes/rentals.js';import returns from '../routes/returns.js';import payments from '../routes/payments.js';import invoices from '../routes/invoices.js';import stats from '../routes/stats.js';import reports from '../routes/reports.js';import users from '../routes/users.js';import settings from '../routes/settings.js';import manage from '../routes/management.js';import backups from '../routes/backups.js';
 import reconciliation from '../routes/reconciliation.js';import security from '../routes/security.js';
-if(!process.env.TEST_MONGOD_PATH)throw new Error('TEST_MONGOD_PATH is required; this script only uses a temporary test database');
+if(process.env.DB_DRIVER==='mongodb'||process.env.NODE_ENV==='production')throw new Error('Smoke tests require an isolated PostgreSQL test environment');
 process.env.AUTH_SECRET='smoke-auth-key-for-disposable-test-only-123456789';process.env.BACKUP_ENCRYPTION_KEY='smoke-backup-key-for-disposable-test-only-123456';
 const cleanup=await testDatabase();
 await User.create({name:'Smoke Owner',username:'smoke_owner',passwordHash:await hashPassword('SmokeTestOnly123!'),role:'owner'});

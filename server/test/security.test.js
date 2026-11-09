@@ -7,6 +7,7 @@ import { User,AuditEvent } from '../models/index.js';
 import { hashPassword, checkPassword, requireAuth, requireAdmin, sign, validateAuthConfig } from '../utils/auth.js';
 import auth from '../routes/auth.js';
 import users from '../routes/users.js';
+import {database} from '../db/connection.js';
 
 process.env.AUTH_SECRET = crypto.randomBytes(32).toString('hex');
 process.env.SETUP_KEY = crypto.randomBytes(32).toString('hex');
@@ -14,25 +15,22 @@ process.env.SETUP_KEY = crypto.randomBytes(32).toString('hex');
 test('authentication security regression checks (isolated model doubles)', async t => {
   t.mock.method(AuditEvent,'create',async()=>[]);
   let account;
-  let locked = false;
   let creates = 0;
-  t.mock.method(User, 'countDocuments', async () => account ? 1 : 0);
+  t.mock.method(User, 'countDocuments', () => ({session(){return this;},then(resolve,reject){return Promise.resolve(account?1:0).then(resolve,reject);}}));
   t.mock.method(User, 'findOne', async ({ username }) => account?.username === username ? account : null);
   t.mock.method(User, 'findById', async id => String(id) === account?._id ? account : null);
   t.mock.method(User, 'create', async data => {
+    const many=Array.isArray(data);if(many)data=data[0];
     creates++;
     account = { ...data, _id: '012345678901234567890123', active: true, sessionVersion: 0, lastSeenAt: new Date(), save: async () => account };
-    return account;
+    return many?[account]:account;
   });
   t.mock.method(User, 'updateOne', async (filter, update) => {
     if (update.$inc) account.sessionVersion += update.$inc.sessionVersion;
     if (update.$set) Object.assign(account, update.$set);
     return { modifiedCount: 1 };
   });
-  t.mock.method(User.db, 'collection', () => ({
-    insertOne: async () => { if (locked) throw Object.assign(new Error('duplicate'), { code: 11000 }); locked = true; },
-    deleteOne: async () => { locked = false; }
-  }));
+  t.mock.method(database,'startSession',async()=>({withTransaction:async fn=>fn(),endSession:async()=>{}}));
   const app = express();
   app.use(express.json());
   app.use('/auth', auth);

@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import mongoose from 'mongoose';
+import {connectDatabase,database,databaseDriver} from './db/connection.js';
+import {legacyMigrationGate,freezeLegacySource} from './db/migrationGuard.js';
+import {migrateMongo} from './db/migrateMongo.js';
 import equipment from './routes/equipment.js';
 import customers from './routes/customers.js';
 import availabilityRoute from './routes/availability.js';
@@ -35,11 +37,13 @@ if (process.env.TRUST_PROXY_HOPS) {
 }
 app.disable('x-powered-by');
 app.use(cors());
+app.use('/api',legacyMigrationGate);
+app.post('/api/migration/freeze',express.json({limit:'4kb'}),freezeLegacySource);
 app.use('/api/backups', requireAuth, backups);
 app.use(express.json());
 
 app.get('/api/health', (req, res) =>
-  res.json({ ok: true, db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' }));
+  res.json({ ok: database.connected, db: database.connected ? 'connected' : 'disconnected',database:databaseDriver==='postgres'?'postgresql':'mongodb-migration-bridge' }));
 app.use('/api/auth', auth);
 app.use('/api', requireAuth);   // everything below needs a logged-in user
 app.use('/api/equipment', equipment);
@@ -72,15 +76,17 @@ async function promoteOwner() {
   if (a) { a.role = 'owner'; await a.save(); console.log('Owner account: ' + a.username); }
 }
 
-if (process.env.NODE_ENV === 'production' && !process.env.MONGODB_URI) throw new Error('MONGODB_URI is required in production');
-const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/camping_lodge';
-mongoose.connect(uri)
+connectDatabase()
   .then(async () => {
-    console.log('MongoDB connected');
+    console.log(databaseDriver==='postgres'?'PostgreSQL connected':'MongoDB migration bridge connected');
+    if(databaseDriver==='postgres'&&process.env.AUTO_MIGRATE_FROM_MONGODB==='true'){
+      const result=await migrateMongo();console.log('PostgreSQL migration verified',JSON.stringify(result.counts));
+    }
+    if(databaseDriver==='postgres'&&process.env.MONGODB_URI&&process.env.AUTO_MIGRATE_FROM_MONGODB!=='true'&&!(await User.countDocuments()))throw new Error('Complete the migration before serving an empty PostgreSQL database');
     await promoteOwner();
     await initializeDocumentNumbers();
     await getSettings();
-    startBackupSchedule();
+    if(databaseDriver==='postgres')startBackupSchedule();
     app.listen(process.env.PORT || 5000, () => console.log('API on port ' + (process.env.PORT || 5000)));
   })
-  .catch(e => { console.error('MongoDB connection failed:', e.message); process.exit(1); });
+  .catch(() => { console.error('PostgreSQL startup failed. Check DATABASE_URL and migration status.'); process.exit(1); });

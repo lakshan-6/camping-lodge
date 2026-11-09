@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import {database} from '../db/connection.js';
 import crypto from 'node:crypto';
 import { AuditEvent, Mutation } from '../models/index.js';
 import { httpErr } from './availability.js';
@@ -8,9 +8,8 @@ export async function exclusive(fn) {
   return run;
 }
 export async function transaction(fn) {
-  const session = await mongoose.startSession();
+  const session = await database.startSession();
   try { return await session.withTransaction(() => fn(session), { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } }); }
-  catch (e) { if (e.code === 20) throw httpErr(503, 'This operation requires MongoDB Atlas or a local replica set. No changes were saved.'); throw e; }
   finally { await session.endSession(); }
 }
 export async function audit(session, user, action, target, before, after) {
