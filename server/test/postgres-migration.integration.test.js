@@ -8,6 +8,7 @@ import {definitions} from '../db/definitions.js';
 import {importSnapshot} from '../db/importSnapshot.js';
 import {hashPassword,checkPassword} from '../utils/auth.js';
 import {createBackup,backupEnvelope,decryptSnapshot} from '../utils/backups.js';
+import {invoicePdfBuffer} from '../utils/invoiceMail.js';
 
 process.env.BACKUP_ENCRYPTION_KEY=crypto.randomBytes(32).toString('hex');
 test('PostgreSQL enforces relations and verifies a lossless migration before cutover',{timeout:120000},async t=>{
@@ -46,6 +47,7 @@ test('PostgreSQL enforces relations and verifies a lossless migration before cut
   const imported=await importSnapshot(snapshot);assert.equal(imported.verified,true);
   const saved=await M.User.findById(owner._id);assert.ok(await checkPassword('MigrationPassword123!',saved.passwordHash));assert.equal(+saved.createdAt,+owner.createdAt);
   assert.equal((await M.Order.findById(order._id)).orderNo,'CL-0042');assert.equal((await M.Payment.findOne({order:order._id})).amount,100.25);
+  const pdf=await invoicePdfBuffer(invoice._id);assert.equal(pdf.invoiceNo,'INV-0007');assert.equal(pdf.buffer.subarray(0,5).toString(),'%PDF-');assert.ok(pdf.buffer.length>1000);
   assert.equal((await M.EquipmentUnit.findById(units[0]._id)).code,'SB-001');assert.equal((await M.EquipmentUnit.findById(units[0]._id)).rental,rental._id);
   const backup=await M.Backup.findById(encrypted._id);assert.equal(backup.payload.toString('hex'),encrypted.payload.toString('hex'));assert.equal(decryptSnapshot(backupEnvelope(backup)).collections.User[0]._id,owner._id);
   assert.equal((await query('SELECT * FROM data_migrations')).rows.length,1);

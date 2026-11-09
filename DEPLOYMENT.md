@@ -12,7 +12,7 @@ The React build and Express API run on one Render URL. PostgreSQL is the default
 6. Deploy, then confirm `/api/health` reports `database: postgresql` and `db: connected`.
 7. Open the main URL and create the first owner using the private `SETUP_KEY`. Choose an owner password of 12-128 characters. Check login, inventory, orders, payments and a browser refresh on `/orders`.
 
-During the existing installation's migration, `render.yaml` intentionally retains its legacy environment names until cutover is verified. Do not use that legacy Blueprint for a new PostgreSQL installation or sync it during migration. Update it to PostgreSQL settings after verification.
+`render.yaml` configures the free PostgreSQL web service and prompts for the private DATABASE_URL. For a new installation, **New > Blueprint** is an alternative to the manual settings above. For an existing MongoDB installation, use the migration bridge commit and the two-phase procedure before syncing the final PostgreSQL Blueprint. The production cutover was verified on 9 November 2026; keep the frozen Atlas source as a recovery copy.
 
 Keep one application instance while login rate limiting uses an in-memory store. `TRUST_PROXY_HOPS=1` describes the Render proxy topology; review it before changing hosts. The Vite development server is not used in production. Invoice email is optional and needs private SMTP settings plus a host that supports the provider's outbound port.
 

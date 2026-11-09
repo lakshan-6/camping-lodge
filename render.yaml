@@ -13,10 +13,9 @@ services:
         value: production
       - key: TRUST_PROXY_HOPS
         value: "1"
-      # Temporary migration bridge; switch to postgres only after verified cutover.
       - key: DB_DRIVER
-        value: mongodb
-      - key: MONGODB_URI
+        value: postgres
+      - key: DATABASE_URL
         sync: false
       - key: AUTH_SECRET
         generateValue: true
