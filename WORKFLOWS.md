@@ -54,7 +54,7 @@ Orders supports literal search by order number/customer/phone/NIC, status and pi
 
 In **New order**, enter the customer's NIC. A matching NIC fills in the existing customer's saved details. If the NIC is new, enter the full name and phone number (email and address are optional); the customer is saved when the order is created. People with different NICs can share a phone number. If the phone matches an older profile without an NIC, complete that profile for the same person or confirm it is a different person. Choose pickup and return date/time, available items and quantities, then select **NIC** or **Money** as security. The physical NIC or deposit is confirmed at pickup. Rental advances are separate and optional. Existing bookings with pending details can still be completed through **Add details**.
 
-If booking email is configured and the customer has an email address, creating a booking sends its confirmation automatically. Check the message above the Orders list for the email result. The booking stays saved if the address is missing or the email cannot be sent.
+When Brevo is configured and the customer has an email address, the app emails booking confirmations, payment/refund receipts, deposit updates, pickup confirmations and partial/final return confirmations. A payment recorded during booking, pickup or return appears in that confirmation. Check the status after saving. The record stays saved if the email address is missing or delivery cannot be confirmed.
 
 ## Cash close and physical stock counts
 

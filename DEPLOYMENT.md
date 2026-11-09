@@ -16,13 +16,13 @@ The React build and Express API run on one Render URL. PostgreSQL is the default
 
 Keep one application instance while login rate limiting uses an in-memory store. `TRUST_PROXY_HOPS=1` describes the Render proxy topology; review it before changing hosts. The Vite development server is not used in production. Invoice email is optional and uses separate SMTP settings.
 
-## Automatic booking confirmation emails
+## Automatic rental emails
 
-Render Free blocks common SMTP ports. New order confirmations use the [Brevo transactional HTTPS API](https://developers.brevo.com/docs/send-a-transactional-email) instead.
+Render Free blocks common SMTP ports. Booking, payment, pickup and return emails use the [Brevo transactional HTTPS API](https://developers.brevo.com/docs/send-a-transactional-email) instead.
 
 1. Create or sign in to a Brevo account with transactional sending enabled. [Verify a sender address](https://help.brevo.com/hc/en-us/articles/208836149-Create-a-new-sender-From-name-and-From-email). An authenticated business domain is recommended for stable sender identity and deliverability.
 2. Create a Brevo API key. In the existing Render service's **Environment** settings, set `BREVO_API_KEY` privately and `BOOKING_EMAIL_FROM` to the verified address. Save and deploy the updated code. Do not commit the key or paste it in chat.
-3. New bookings with a valid customer email then send a confirmation with the order number, items, Sri Lanka pickup/return times, rental total, recorded payment, balance and security plan. The email omits the customer's NIC number, address and phone number. The order page shows whether the sending service accepted the email. Check delivery in Brevo's transactional logs.
+3. With a valid customer email, the app sends booking confirmations, recorded payment and refund receipts, deposit updates, pickup confirmations, and partial/final return confirmations. Money recorded as part of booking, pickup or return is included in the same email. Automatic emails omit the customer's NIC number, address and phone number. Check delivery in Brevo's transactional logs.
 
 Missing email, missing configuration and provider errors do not undo bookings. A repeated submission with the same request ID does not send again. A rejected or timed-out email is not retried automatically, since a timeout can occur after the provider accepts it. Existing orders are not emailed when this is enabled. The built-in local database mode disables outgoing mail.
 

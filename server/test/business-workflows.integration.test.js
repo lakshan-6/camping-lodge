@@ -244,5 +244,37 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   delete process.env.BREVO_API_KEY;
   assert.equal((await ok('/orders','POST',{...body,requestId:crypto.randomUUID()})).bookingEmail,'not_configured');
   assert.equal(requests.length,2);
+
+  process.env.BREVO_API_KEY='test-booking-key';providerStatus=201;requests.length=0;
+  const tent=await ok('/equipment','POST',{name:'Lifecycle tent',category:'Camping',totalQuantity:2,periodRate:400,deposit:50});
+  const booking=await ok('/orders','POST',{customer:contact._id,...dates(),items:[{equipment:tent._id,quantity:2}],securityMethod:'money',requestId:crypto.randomUUID()});
+  const pay={order:booking._id,type:'rental',amount:100,method:'bank_transfer',requestId:crypto.randomUUID()};
+  assert.equal((await ok('/payments','POST',pay)).notificationEmail,'accepted');
+  assert.equal((await ok('/payments','POST',pay)).notificationEmail,'already_processed');
+  assert.match(requests.at(-1).textContent,/Rental payment: .*100.*Bank transfer/);
+  const refund=await ok('/payments','POST',{...pay,type:'refund',amount:25,reason:'Internal refund note',requestId:crypto.randomUUID()});
+  assert.equal(refund.notificationEmail,'accepted');assert.match(requests.at(-1).subject,/refund confirmation/);
+  assert.doesNotMatch(requests.at(-1).textContent,/Internal refund note/);
+
+  const pickup={order:booking._id,payBalance:true,method:'cash',sendVia:'both',securityMethod:'money',securityDeposit:{received:true,amount:50,method:'cash'},requestId:crypto.randomUUID()};
+  const rented=await ok('/rentals/start','POST',pickup);
+  assert.equal(rented.notificationEmail,'accepted');assert.equal(rented.whatsappInvoice,rented.invoiceId);
+  assert.equal((await ok('/rentals/start','POST',pickup)).notificationEmail,'already_processed');
+  assert.match(requests.at(-1).textContent,/Rental balance payment: .*725/);
+  assert.match(requests.at(-1).textContent,/Security deposit received: .*50/);
+
+  const part={rental:rented._id,items:[{equipment:tent._id,quantityDamaged:1}],damageFee:50,paid:{damage:true},method:'cash',requestId:crypto.randomUUID()};
+  const partial=await ok('/returns','POST',part);
+  assert.equal(partial.partial,true);assert.equal(partial.notificationEmail,'accepted');
+  assert.equal((await ok('/returns','POST',part)).notificationEmail,'already_processed');
+  assert.match(requests.at(-1).subject,/partial return confirmation/);
+  assert.match(requests.at(-1).textContent,/1 damaged/);assert.match(requests.at(-1).textContent,/Fee payment: .*50/);
+  const full=await ok('/returns','POST',{rental:rented._id,items:[{equipment:tent._id,quantityReturned:1}],requestId:crypto.randomUUID()});
+  assert.equal(full.partial,false);assert.equal(full.notificationEmail,'accepted');
+  assert.match(requests.at(-1).textContent,/Your equipment return is complete/);
+  providerStatus=503;
+  const security=await ok('/payments/deposits','POST',{order:booking._id,type:'refund',amount:50,method:'cash',reason:'Security returned',requestId:crypto.randomUUID()});
+  assert.equal(security.notificationEmail,'failed');assert.ok(await M.DepositTransaction.findById(security._id));
+  assert.deepEqual(requests.map(r=>r.tags[0]),['booking-confirmation','payment-confirmation','payment-confirmation','pickup-confirmation','return-confirmation','return-confirmation','security-deposit-update']);
  });
 });

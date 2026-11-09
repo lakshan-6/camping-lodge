@@ -6,6 +6,7 @@ import { requirePermission, can } from '../utils/permissions.js';
 import { paidTotal, recordPayment, syncInvoice, remainingLines,depositHeld,recordSecurityDeposit } from '../utils/finance.js';
 import { emailInvoice } from '../utils/invoiceMail.js';
 import { mailReady } from '../utils/mail.js';
+import { sendPickupUpdate } from '../utils/bookingEmail.js';
 import {getSettings} from './settings.js';
 import {chooseSecurity,receiveNic,nicHeld} from '../utils/securityDeposit.js';
 import {allocateUnits,assertUnitTotals} from '../utils/equipmentUnits.js';
@@ -21,7 +22,9 @@ r.get('/pickup-preview/:order',requirePermission('rentals.write'),wrap(async(req
  res.json({securityMethod:order.securityMethod||'money',nicHeld:nicHeld(order),securityHeld:await depositHeld(order._id),depositAmount:order.depositAmount,items});
 }));
 r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
+ let payment, deposit;
  const result=await mutate(req,'rental.start:'+req.body.order,async session=>{
+  payment=undefined; deposit=undefined;
   const order=await Order.findById(req.body.order).session(session);if(!order||order.deletedAt)throw httpErr(404,'Order not found');
   if(order.status!=='reserved'||await Rental.exists({order:order._id}).session(session))throw httpErr(409,'This booking has already been collected or cancelled');
   const customer=await Customer.findById(order.customer).session(session);if(!customer||customer.detailsPending)throw httpErr(409,'Complete customer name and NIC before handover');
@@ -43,11 +46,11 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
     const amount=Number(req.body.securityDeposit.amount),held=await depositHeld(order._id,session);
     if(!Number.isFinite(amount)||amount<=0)throw httpErr(400,'Enter the money deposit actually received');
     order.depositAmount=money(Math.max(order.depositAmount||0,held+amount),'Required deposit',true);
-    await recordSecurityDeposit(order,{type:'collect',amount,method:req.body.securityDeposit.method},req.user,session);
+    deposit=await recordSecurityDeposit(order,{type:'collect',amount,method:req.body.securityDeposit.method},req.user,session);
    }
    if(await depositHeld(order._id,session)<=0)throw httpErr(409,'Record the money security deposit before handover, or choose NIC security');
   }
-  if(req.body.payBalance){const amount=Math.max(0,order.totalAmount-await paidTotal(order._id,session));if(amount)await recordPayment(order,{amount,type:'balance',method:req.body.method},req.user,session);}
+  if(req.body.payBalance){const amount=Math.max(0,order.totalAmount-await paidTotal(order._id,session));if(amount)payment=await recordPayment(order,{amount,type:'balance',method:req.body.method},req.user,session);}
   const [rental]=await Rental.create([{order:order._id,customer:order.customer,pickedUpAt:now,dueDate,pickupChecklist:required.map(label=>({label,checked:true}))}],{session});
   await allocateUnits(items,req.body.unitSelections,rental,session);
   order.startDate=now;order.endDate=dueDate;order.status='active';order.sendVia=['email','whatsapp','both','none'].includes(req.body.sendVia)?req.body.sendVia:'none';await order.save({session});
@@ -55,8 +58,13 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
   const invoice=await syncInvoice(order,session,true);await audit(session,req.user,'rental.started',order._id,null,{rental:rental._id,dueDate,checklist:rental.pickupChecklist});
   return {...rental.toObject(),invoiceId:invoice._id,via:order.sendVia};
  });
- if(!result._replayed){if(['email','both'].includes(result.via)&&mailReady()){try{await emailInvoice(result.invoiceId);result.emailNote='Invoice emailed.';}catch{result.emailNote='Rental saved. Email delivery failed; use PDF or WhatsApp.';}}
- if(['whatsapp','both'].includes(result.via))result.whatsappInvoice=result.invoiceId;}
+ result.notificationEmail=result._replayed?'already_processed':await sendPickupUpdate(result,payment,deposit);
+ if(!result._replayed){
+  if(result.notificationEmail==='not_configured'&&['email','both'].includes(result.via)&&mailReady()){
+   try{await emailInvoice(result.invoiceId);result.emailNote='Invoice emailed.';}catch{result.emailNote='Invoice email failed; use PDF or WhatsApp.';}
+  }
+  if(['whatsapp','both'].includes(result.via))result.whatsappInvoice=result.invoiceId;
+ }
  res.status(201).json(result);
 }));
 r.post('/:id/extend',requirePermission('rentals.write'),wrap(async(req,res)=>{

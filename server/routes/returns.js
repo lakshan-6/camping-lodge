@@ -7,6 +7,7 @@ import { requirePermission,assertPermission } from '../utils/permissions.js';
 import { paidTotal,remainingLines,recordPayment,syncInvoice } from '../utils/finance.js';
 import {returnUnitRows,receiveUnits,assertUnitTotals} from '../utils/equipmentUnits.js';
 import {nicHeld,releaseNic} from '../utils/securityDeposit.js';
+import { sendReturnUpdate } from '../utils/bookingEmail.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 async function lateInfo(rental,lines,session=null){
  const settings=await getSettings(session);const late=Date.now()-+rental.dueDate-(settings.graceMinutes||0)*60000;
@@ -20,9 +21,13 @@ r.get('/preview/:rental',wrap(async(req,res)=>{
  res.json({...await lateInfo(rental,lines),balance:Math.max(0,order.totalAmount-await paidTotal(order._id)),items:lines,checklist:rental.pickupChecklist||[],securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
 }));
 r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
- res.status(201).json(await mutate(req,'return:'+req.body.rental,async session=>{
+ let orderId;
+ const payments=[];
+ const result=await mutate(req,'return:'+req.body.rental,async session=>{
+ payments.length=0;
  const rental=await Rental.findById(req.body.rental).session(session);if(!rental)throw httpErr(404,'Rental not found');if(rental.status==='returned')throw httpErr(409,'Already fully returned');
  const order=await Order.findById(rental.order).session(session),lines=await remainingLines(order._id,session);
+ orderId=order._id;
  if(!Array.isArray(req.body.items))throw httpErr(400,'Enter returned quantities');
  const unique=new Set();for(const i of req.body.items){if(unique.has(String(i.equipment)))throw httpErr(400,'Duplicate return item');unique.add(String(i.equipment));if(!lines.some(l=>String(l.equipment._id)===String(i.equipment)))throw httpErr(400,'Equipment is not part of this rental');}
  const rows=lines.map(line=>{
@@ -52,9 +57,10 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  order.totalAmount=money(order.totalAmount+lateFee+damageFee,'Total',true);if(complete)order.status='completed';await order.save({session});
  if(req.body.returnNic===true){if(!complete)throw httpErr(409,'Return all equipment before releasing the NIC');await releaseNic(order,req.user,session);await order.save({session});}
  const paid=req.body.paid||{};
- for(const [flag,amount,type,reference] of [['balance',balanceBefore,'balance','Rental balance'],['late',lateFee,'fee','Late fee'],['damage',damageFee,'fee','Damage fee']])if(paid[flag]&&amount)await recordPayment(order,{amount,type,method:req.body.method,reference},req.user,session);
+ for(const [flag,amount,type,reference] of [['balance',balanceBefore,'balance','Rental balance'],['late',lateFee,'fee','Late fee'],['damage',damageFee,'fee','Damage fee']])if(paid[flag]&&amount)payments.push(await recordPayment(order,{amount,type,method:req.body.method,reference},req.user,session));
  await syncInvoice(order,session);await audit(session,req.user,complete?'rental.returned':'rental.partial_return',order._id,null,{return:ret._id,lateFee,damageFee,waived,items:rows.map(r=>({equipment:r.line.equipment._id,returned:r.ok,damaged:r.dmg,lost:r.lost}))});
  return {...ret.toObject(),emailNote:complete?'Return saved. Invoice and balance updated.':'Partial return saved. Remaining equipment is still out.'};
- }));
+ });
+ res.status(201).json({...result,notificationEmail:result._replayed?'already_processed':await sendReturnUpdate(orderId,result,payments)});
 }));
 export default r;

@@ -11,7 +11,7 @@ import { priceItems, paidTotal, recordPayment, syncInvoice, depositHeld } from '
 import {dayRange} from '../utils/businessTime.js';
 import {securityMethod,chooseSecurity,receiveNic,releaseNic,nicHeld} from '../utils/securityDeposit.js';
 import {bookingContact,resolveBookingCustomer} from '../utils/customers.js';
-import {sendBookingConfirmation} from '../utils/bookingEmail.js';
+import {sendBookingConfirmation,sendPaymentUpdate} from '../utils/bookingEmail.js';
 const r=Router(), wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const ownerOnly=(req,res,next)=>req.user?.role==='owner'?next():next(httpErr(403,'Only the owner can delete past orders'));
 const limit=rateLimit({windowMs:15*60*1000,limit:5,keyGenerator:req=>String(req.user._id),standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many deletion attempts. Try again in 15 minutes.'}});
@@ -62,19 +62,22 @@ r.put('/:id',requirePermission('orders.write'),wrap(async(req,res)=>{
   }));
 }));
 r.patch('/:id/cancel',requirePermission('orders.write'),wrap(async(req,res)=>{
-  res.json(await mutate(req,'order.cancel:'+req.params.id,async session=>{
+  let refund;
+  const result=await mutate(req,'order.cancel:'+req.params.id,async session=>{
+    refund=undefined;
     const order=await Order.findById(req.params.id).session(session);
     if(!order||order.deletedAt)throw httpErr(404,'Order not found');if(order.status!=='reserved')throw httpErr(409,'Only reserved bookings can be cancelled');
     if(nicHeld(order))throw httpErr(409,'Record returning the held NIC before cancelling this booking');
     const before=order.toObject(),paid=await paidTotal(order._id,session),held=await depositHeld(order._id,session);
     if(held>0)throw httpErr(409,'Refund or apply the held security deposit before cancelling');
     const action=req.body.action||'pending';if(!['refund','keep','pending'].includes(action))throw httpErr(400,'Choose a cancellation payment action');
-    if(paid>0&&action==='refund')await recordPayment(order,{type:'refund',amount:paid,method:req.body.method,reason:req.body.reason||'Booking cancelled'},req.user,session);
+    if(paid>0&&action==='refund')refund=await recordPayment(order,{type:'refund',amount:paid,method:req.body.method,reason:req.body.reason||'Booking cancelled'},req.user,session);
     if(paid>0&&action==='keep')assertPermission(req.user,'payments.refund');
     order.status='cancelled';order.cancellation={action,reason:req.body.reason||'',refundPending:action==='pending'?paid:0};await order.save({session});
     await Invoice.updateMany({order:order._id,status:{$ne:'void'}},{$set:{status:'void'}},{session});
     await audit(session,req.user,'order.cancelled',order._id,before,order);return order;
-  }));
+  });
+  res.json({...result,...(!result._replayed&&refund?{notificationEmail:await sendPaymentUpdate(refund)}:{})});
 }));
 r.post('/:id/security',wrap(async(req,res)=>{
  const action=req.body.action;if(!['set','receive','return'].includes(action))throw httpErr(400,'Choose a security action');

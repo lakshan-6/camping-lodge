@@ -4,17 +4,20 @@ import {api,getToken,lkr} from '../api.js';
 import {can} from '../permissions.js';
 import {sendInvoiceWhatsApp} from '../whatsapp.js';
 import SecurityDeposit from './SecurityDeposit.jsx';
+import {emailStatusMessage} from '../emailStatus.js';
 const labels={deposit:'Rental advance',rental:'Rental payment',balance:'Rental balance',fee:'Extra charge',refund:'Refund to customer'};
 export default function OrderWorkspace({id,me,onClose,onSaved}){
  const [data,setData]=useState(null),[error,setError]=useState(''),[form,setForm]=useState(null),[busy,setBusy]=useState(false),[email,setEmail]=useState(false),[history,setHistory]=useState(null);
+ const [notice,setNotice]=useState('');
  const load=()=>api('/orders/'+id+'/detail').then(setData).catch(e=>setError(e.message));
  useEffect(()=>{load();api('/settings').then(s=>setEmail(s.emailConfigured));},[id]);
- const open=(mode,type)=>{setError('');setForm({mode,type,amount:mode==='security'?(type==='collect'?Math.max(0,data.depositAmount-data.securityHeld):data.securityHeld):type==='refund'?data.paid:Math.max(0,data.totalAmount-data.paid),method:'cash',reason:'',allowOverpayment:false,requestId:crypto.randomUUID()});};
- async function save(e){e.preventDefault();if(busy)return;setBusy(true);setError('');try{await api(form.mode==='security'?'/payments/deposits':'/payments',{method:'POST',body:{...form,amount:Number(form.amount),order:id}});setForm(null);await load();onSaved?.();}catch(x){setError(x.message);}finally{setBusy(false);}}
+ const open=(mode,type)=>{setError('');setNotice('');setForm({mode,type,amount:mode==='security'?(type==='collect'?Math.max(0,data.depositAmount-data.securityHeld):data.securityHeld):type==='refund'?data.paid:Math.max(0,data.totalAmount-data.paid),method:'cash',reason:'',allowOverpayment:false,requestId:crypto.randomUUID()});};
+ async function save(e){e.preventDefault();if(busy)return;setBusy(true);setError('');try{const saved=await api(form.mode==='security'?'/payments/deposits':'/payments',{method:'POST',body:{...form,amount:Number(form.amount),order:id}});setForm(null);setNotice(`Transaction saved. ${emailStatusMessage(saved.notificationEmail)}`.trim());await load();onSaved?.();}catch(x){setError(x.message);}finally{setBusy(false);}}
  async function pdf(invoice){try{const r=await fetch(`/api/invoices/${invoice._id}/pdf`,{headers:{Authorization:'Bearer '+getToken()}});if(!r.ok)throw new Error('Could not open PDF');const url=URL.createObjectURL(await r.blob());window.open(url,'_blank');}catch(e){setError(e.message);}}
  return <div className="modal" onClick={()=>!busy&&onClose()}><div className="workspace" onClick={e=>e.stopPropagation()}>
  <div className="bar"><h2>{data?.orderNo||'Order details'}</h2><button onClick={onClose} disabled={busy}>Close</button></div>
  {error&&<p className="bad" role="alert">{error}</p>}
+ {notice&&<p className="notice" role="status">{notice}</p>}
  {data&&<><p><b>{data.customer?.name}</b> · {data.customer?.phone} · {data.status}</p><div className="metric-row"><p>Rental total <b>{lkr(data.totalAmount)}</b></p><p>Rental payments <b>{lkr(data.paid)}</b></p><p>Rental balance <b>{lkr(data.status==='cancelled'?0:data.totalAmount-data.paid)}</b></p><p>Security deposit held <b>{lkr(data.securityHeld)}</b></p></div>
  <SecurityDeposit key={data._id} order={data} me={me} onSaved={async()=>{await load();onSaved?.();}}/>
  <ResponsiveTable><thead><tr><th>Item</th><th>Qty</th><th>Returned</th><th>Unit codes</th><th>Amount</th></tr></thead><tbody>{data.items.map(i=><tr key={i._id}><td>{i.equipment?.name}</td><td>{i.quantity}</td><td>{i.returnedQuantity||0}</td><td>{i.unitAssignments?.length?i.unitAssignments.map(u=><small key={u.unit}><b>{u.code}</b> · {u.outcome}</small>):'Quantity tracked'}</td><td>{lkr(i.lineTotal)}</td></tr>)}</tbody></ResponsiveTable>
