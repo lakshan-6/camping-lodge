@@ -171,4 +171,37 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal((await M.User.findById(owner._id)).sessionVersion,6);
   assert.ok((await ok('/manage/audit')).some(a=>a.action==='backup.restored'));
  });
+ await t.test('booking identifies customers by NIC and saves new customers with their orders',async()=>{
+  const gear=await ok('/equipment','POST',{name:'Booking test lantern',category:'Lighting',totalQuantity:6,periodRate:800,deposit:500});
+  const body={...dates(),items:[{equipment:gear._id,quantity:1}],securityMethod:'nic',requestId:crypto.randomUUID()};
+  const details={name:'Booking Customer',phone:'0773333333',nic:'987654321v',email:'booking@example.test',address:'Colombo'};
+  const beforeCustomers=await M.Customer.countDocuments(),beforeOrders=await M.Order.countDocuments();
+  for(const field of ['name','phone','nic'])assert.equal((await request('/orders','POST',{...body,customerDetails:{...details,[field]:' '}})).status,400);
+  assert.equal((await request('/orders','POST',{...body,securityMethod:'money',customerDetails:{...details,nic:''}})).status,400);
+  assert.equal((await request('/orders','POST',{...body,items:[{equipment:gear._id,quantity:7}],customerDetails:details})).status,409);
+  await ok('/users/'+staff._id,'PATCH',{permissions:['orders.write']});
+  assert.equal((await request('/orders','POST',{...body,customerDetails:details},sign(await M.User.findById(staff._id)))).status,403);
+  assert.equal(await M.Customer.countDocuments(),beforeCustomers);
+  assert.equal(await M.Order.countDocuments(),beforeOrders);
+  const [created, concurrent]=await Promise.all([
+   ok('/orders','POST',{...body,customerDetails:details}),
+   ok('/orders','POST',{...body,requestId:crypto.randomUUID(),customerDetails:{...details,nic:details.nic.toUpperCase()}}),
+  ]);
+  assert.notEqual(created._id,concurrent._id);assert.equal(created.customer,concurrent.customer);
+  assert.equal((await ok('/orders','POST',{...body,customerDetails:details}))._id,created._id);
+  assert.equal(created.securityMethod,'nic');
+  const saved=await M.Customer.findById(created.customer);
+  assert.equal(saved.nic,'987654321V');assert.equal(saved.email,details.email);assert.equal(saved.address,details.address);
+  const returning=await ok('/orders','POST',{...body,requestId:crypto.randomUUID(),customerDetails:{...details,name:'Unconfirmed change'}},sign(await M.User.findById(staff._id)));
+  assert.equal(returning.customer,created.customer);assert.equal((await M.Customer.findById(created.customer)).name,details.name);
+  const next=await ok('/orders','POST',{...body,requestId:crypto.randomUUID(),securityMethod:'money',customerDetails:{name:'Optional fields blank',phone:'94773333333',nic:'200411112222'}});
+  assert.notEqual(next.customer,created.customer);
+  assert.equal(next.securityMethod,'money');assert.equal(await M.DepositTransaction.countDocuments({order:next._id}),0);
+  assert.equal(await M.Customer.countDocuments(),beforeCustomers+2);assert.equal(await M.Order.countDocuments(),beforeOrders+4);
+  const legacy=await M.Customer.create({name:'Incomplete profile',phone:'0775555555'});
+  const newPerson={...body,requestId:crypto.randomUUID(),customerDetails:{name:'Different person',phone:legacy.phone,nic:'200433334444'}};
+  assert.equal((await request('/orders','POST',newPerson)).status,409);
+  const separate=await ok('/orders','POST',{...newPerson,customerDetails:{...newPerson.customerDetails,confirmDifferentPerson:true}});
+  assert.notEqual(separate.customer,legacy._id);assert.equal((await M.Customer.findById(legacy._id)).nic,undefined);
+ });
 });

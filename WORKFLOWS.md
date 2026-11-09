@@ -8,7 +8,7 @@ Bookings check available whole-unit quantities. A booking and its advance save t
 
 ## NIC or money as rental security
 
-New order > Rental security chooses **Keep customer NIC** or **Refundable money deposit**. This is a plan, not a receipt. At handover, explicitly confirm the physical NIC received, or enter and confirm the money deposit actually received. An existing recorded deposit also satisfies money security. Rental payments remain separate; a NIC never adds to cash, revenue or a refundable money balance. Staff need payment permission to record money, but can receive/return NICs with their handover/return permissions.
+Under **New order > Security deposit**, choose **NIC** or **Money**. At handover, explicitly confirm the physical NIC received, or enter and confirm the money deposit actually received. An existing recorded deposit also satisfies money security. Rental payments remain separate; a NIC never adds to cash, revenue or a refundable money balance. Staff need payment permission to record money, but can receive/return NICs with their handover/return permissions.
 
 The customer must have a valid NIC number before their physical NIC can be recorded as held. The same customer's NIC cannot be held for two orders at once. View order > Security for this rental shows its custody status. Return all equipment first, then confirm the NIC was physically returned, either in the final return form or later in View order. A completed order can still show **NIC held · return pending**. Returning equipment alone never releases the NIC. A held NIC blocks cancellation, hiding and permanent deletion until its return is recorded. Refund/apply held money before switching to NIC, or return a held NIC before switching to money. Security type changes belong before handover.
 
@@ -50,7 +50,9 @@ Use the owner-only Backups screen to create/download encrypted copies. Automatic
 
 The home screen is now Today's work. Owner/admin accounts can open Business overview separately. Money combines Invoices, Payments/deposits and Daily cash close. Existing `/billing`, `/payments` and `/today` links redirect to the new screens.
 
-Orders supports literal search by order number/customer/phone/NIC, status and pickup-date range in Sri Lanka time. Results show 25, 50 or 100 per page. Cancel booking, Hide from list and Delete permanently are separate actions. WhatsApp pre-bookings initially ask only for the phone; expand Add customer details now to enter full details immediately, or collect them at pickup.
+Orders supports literal search by order number/customer/phone/NIC, status and pickup-date range in Sri Lanka time. Results show 25, 50 or 100 per page. Cancel booking, Hide from list and Delete permanently are separate actions.
+
+In **New order**, enter the customer's NIC. A matching NIC fills in the existing customer's saved details. If the NIC is new, enter the full name and phone number (email and address are optional); the customer is saved when the order is created. People with different NICs can share a phone number. If the phone matches an older profile without an NIC, complete that profile for the same person or confirm it is a different person. Choose pickup and return date/time, available items and quantities, then select **NIC** or **Money** as security. The physical NIC or deposit is confirmed at pickup. Rental advances are separate and optional. Existing bookings with pending details can still be completed through **Add details**.
 
 ## Cash close and physical stock counts
 

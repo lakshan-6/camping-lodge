@@ -1,7 +1,8 @@
 import 'dotenv/config';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
-import {connectDatabase,database,databaseDriver} from './db/connection.js';
+import {connectDatabase,connectTestDatabase,database,databaseDriver} from './db/connection.js';
 import {legacyMigrationGate,freezeLegacySource} from './db/migrationGuard.js';
 import {migrateMongo} from './db/migrateMongo.js';
 import equipment from './routes/equipment.js';
@@ -27,6 +28,9 @@ import { startBackupSchedule } from './utils/backups.js';
 import { requirePermission } from './utils/permissions.js';
 import reconciliation from './routes/reconciliation.js';
 import security from './routes/security.js';
+
+const localDatabase = process.argv.includes('--local-development') && process.env.NODE_ENV !== 'production'
+  && databaseDriver === 'postgres' && !process.env.DATABASE_URL;
 
 validateAuthConfig();
 const app = express();
@@ -76,17 +80,36 @@ async function promoteOwner() {
   if (a) { a.role = 'owner'; await a.save(); console.log('Owner account: ' + a.username); }
 }
 
-connectDatabase()
+async function openDatabase() {
+  if (!localDatabase) return connectDatabase();
+  // Development data stays on this machine, with no cloud backups or outgoing email.
+  delete process.env.SMTP_HOST;
+  for (const key of Object.keys(process.env)) if (key.startsWith('BACKUP_S3_')) delete process.env[key];
+  const { PGlite } = await import('@electric-sql/pglite');
+  await connectTestDatabase(new PGlite(fileURLToPath(new URL('./.local-postgres', import.meta.url))));
+}
+
+openDatabase()
   .then(async () => {
-    console.log(databaseDriver==='postgres'?'PostgreSQL connected':'MongoDB migration bridge connected');
-    if(databaseDriver==='postgres'&&process.env.AUTO_MIGRATE_FROM_MONGODB==='true'){
+    console.log(localDatabase ? 'Local PostgreSQL connected (server/.local-postgres)' : databaseDriver==='postgres'?'PostgreSQL connected':'MongoDB migration bridge connected');
+    if(!localDatabase&&databaseDriver==='postgres'&&process.env.AUTO_MIGRATE_FROM_MONGODB==='true'){
       const result=await migrateMongo();console.log('PostgreSQL migration verified',JSON.stringify(result.counts));
     }
-    if(databaseDriver==='postgres'&&process.env.MONGODB_URI&&process.env.AUTO_MIGRATE_FROM_MONGODB!=='true'&&!(await User.countDocuments()))throw new Error('Complete the migration before serving an empty PostgreSQL database');
+    if(!localDatabase&&databaseDriver==='postgres'&&process.env.MONGODB_URI&&process.env.AUTO_MIGRATE_FROM_MONGODB!=='true'&&!(await User.countDocuments()))throw new Error('Complete the migration before serving an empty PostgreSQL database');
     await promoteOwner();
     await initializeDocumentNumbers();
     await getSettings();
     if(databaseDriver==='postgres')startBackupSchedule();
-    app.listen(process.env.PORT || 5000, () => console.log('API on port ' + (process.env.PORT || 5000)));
+    const port = Number(process.env.PORT || 5000);
+    const host = localDatabase ? '127.0.0.1' : undefined;
+    app.listen(port, host, () => console.log('API on port ' + port));
   })
-  .catch(() => { console.error('PostgreSQL startup failed. Check DATABASE_URL and migration status.'); process.exit(1); });
+  .catch(error => {
+    if (localDatabase) console.error(error.code === 'ERR_MODULE_NOT_FOUND'
+      ? 'Local PostgreSQL needs development dependencies. Run npm install in server.'
+      : 'Local PostgreSQL could not start. Check that server/.local-postgres is writable and no other development server is using it.');
+    else if (databaseDriver === 'postgres' && !process.env.DATABASE_URL)
+      console.error('DATABASE_URL is missing. For local development, run npm run dev.');
+    else console.error('Database startup failed. Check the connection settings and migration status.');
+    process.exit(1);
+  });

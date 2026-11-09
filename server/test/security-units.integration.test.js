@@ -57,7 +57,10 @@ test('NIC custody and labelled equipment use real isolated transactions',{timeou
   assert.equal((await request('/customers/'+customer._id,'PUT',{name:customer.name,phone:customer.phone,nic:'200111111111'})).status,409);
   assert.equal((await request(`/orders/${order._id}/cancel`,'PATCH',{action:'pending',reason:'Test'})).status,409);
   const duplicate=await booking(1);assert.equal((await request(`/orders/${duplicate._id}/security`,'POST',{action:'receive',confirmed:true})).status,409);await ok(`/orders/${duplicate._id}/cancel`,'PATCH',{action:'pending',reason:'Test complete'});
-  const noNic=await M.Customer.create({name:'No NIC',phone:'0771111111'}),noNicOrder=await booking(1,'nic',noNic._id);assert.equal((await request(`/orders/${noNicOrder._id}/security`,'POST',{action:'receive',confirmed:true})).status,409);await ok(`/orders/${noNicOrder._id}/cancel`,'PATCH',{action:'pending',reason:'Test complete'});
+  const noNic=await M.Customer.create({name:'No NIC',phone:'0771111111'});
+  assert.equal((await request('/orders','POST',{customer:noNic._id,...date(),securityMethod:'money',items:[{equipment:eq._id,quantity:1}]})).status,400);
+  const noNicOrder=await M.Order.create({orderNo:'LEGACY-NO-NIC',customer:noNic._id,...date(),securityMethod:'nic'});
+  assert.equal((await request(`/orders/${noNicOrder._id}/security`,'POST',{action:'receive',confirmed:true})).status,409);await ok(`/orders/${noNicOrder._id}/cancel`,'PATCH',{action:'pending',reason:'Test complete'});
   const rollbackNic=await booking(1,'nic',other._id);assert.equal((await request('/rentals/start','POST',pickup(rollbackNic,[units[0]._id]))).status,409);assert.equal((await M.Order.findById(rollbackNic._id)).nicHeldAt,undefined);assert.equal(await M.AuditEvent.countDocuments({action:'security.nic_received',target:rollbackNic._id}),0);await ok(`/orders/${rollbackNic._id}/cancel`,'PATCH',{action:'pending',reason:'Test complete'});
  });
  await t.test('handover demands exact available codes, retries allocate once and NIC is not money',async()=>{

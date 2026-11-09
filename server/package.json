@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node --watch index.js",
+    "dev": "node --watch index.js --local-development",
     "start": "node index.js",
     "configure-auth": "node scripts/configure-auth.js",
     "test": "node --test",

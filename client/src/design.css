@@ -2260,3 +2260,28 @@ td[data-actions] {
 .unit-return-list { display: grid; gap: 10px; margin-top: 16px; }
 .unit-return-list label { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr); align-items: center; gap: 12px; margin: 0; }
 @media (max-width: 400px) { .unit-return-list label { grid-template-columns: 1fr; gap: 4px; } .unit-grid { grid-template-columns: 1fr; } }
+
+/* The new booking form follows the order of the conversation at the rental desk. */
+.modal form.new-order-form { max-width: 670px; }
+.new-order-section { display: grid; gap: 12px; min-width: 0; margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: 14px; }
+.new-order-section legend { padding: 0 6px; font-weight: 750; color: var(--pine); }
+.new-order-section .bar { margin: 0; }
+.new-order-section > button, .new-order-section .lines > button { justify-self: start; }
+.new-order-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.new-order-wide { grid-column: 1 / -1; }
+.new-order-form .required-mark { color: var(--bad); }
+.new-order-form textarea { min-height: 64px; }
+.new-order-form .new-order-line { grid-template-columns: minmax(0, 1fr) 82px auto; align-items: end; }
+.new-order-form .new-order-line button { min-height: 43px; }
+.new-order-security label { display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; cursor: pointer; }
+.new-order-security label:has(input:checked) { background: #e6f2e9; border-color: #39835b; }
+.new-order-form .new-order-total strong { color: var(--ink); font-size: 15px; }
+.new-order-advance { color: var(--mute); font-size: 13px; }
+.new-order-advance summary { cursor: pointer; }
+.new-order-advance .new-order-grid { margin-top: 10px; }
+@media (max-width: 540px) {
+  .new-order-section { padding: 10px; }
+  .new-order-grid:not(.new-order-security) { grid-template-columns: minmax(0, 1fr); }
+  .new-order-form .new-order-line { grid-template-columns: minmax(0, 1fr) 76px; }
+  .new-order-form .new-order-line button { grid-column: 1 / -1; justify-self: start; }
+}

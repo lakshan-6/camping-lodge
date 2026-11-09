@@ -10,6 +10,7 @@ import { requirePermission, assertPermission, can } from '../utils/permissions.j
 import { priceItems, paidTotal, recordPayment, syncInvoice, depositHeld } from '../utils/finance.js';
 import {dayRange} from '../utils/businessTime.js';
 import {securityMethod,chooseSecurity,receiveNic,releaseNic,nicHeld} from '../utils/securityDeposit.js';
+import {bookingContact,resolveBookingCustomer} from '../utils/customers.js';
 const r=Router(), wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const ownerOnly=(req,res,next)=>req.user?.role==='owner'?next():next(httpErr(403,'Only the owner can delete past orders'));
 const limit=rateLimit({windowMs:15*60*1000,limit:5,keyGenerator:req=>String(req.user._id),standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many deletion attempts. Try again in 15 minutes.'}});
@@ -30,9 +31,17 @@ r.get('/',wrap(async(req,res)=>{
 }));
 r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
   const result=await mutate(req,'order.create',async session=>{
-    if(!await Customer.findById(req.body.customer).session(session))throw httpErr(400,'Choose an existing customer');
+    let customer;
+    if(req.body.customerDetails!==undefined){
+      if(req.body.customer||!req.body.customerDetails||typeof req.body.customerDetails!=='object'||Array.isArray(req.body.customerDetails))throw httpErr(400,'Choose an existing customer or enter new customer details');
+      customer=await resolveBookingCustomer(req.body.customerDetails,req.user,session);
+    }else{
+      customer=await Customer.findById(req.body.customer).session(session);
+      if(!customer)throw httpErr(400,'Choose an existing customer');
+      bookingContact(customer);
+    }
     const p=await priceItems(req.body,session);
-    const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:req.body.customer,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:p.deposit,securityMethod:securityMethod(req.body.securityMethod??'money'),notes:req.body.notes}],{session});
+    const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:customer._id,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:p.deposit,securityMethod:securityMethod(req.body.securityMethod??'money'),notes:req.body.notes}],{session});
     await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
     if(Number(req.body.advance?.amount)>0)await recordPayment(order,{...req.body.advance,type:'deposit'},req.user,session);
     await audit(session,req.user,'order.created',order._id,null,order);return order;

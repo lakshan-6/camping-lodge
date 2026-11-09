@@ -2,9 +2,10 @@
 Camping Lodge · 071 552 4499 · LKR
 
 ## Run
-1. Use PostgreSQL (local or a private Neon database) and set DATABASE_URL in server/.env. DB_DRIVER defaults to postgres. Existing Atlas deployments must follow [POSTGRES_MIGRATION.md](POSTGRES_MIGRATION.md) before switching.
-2. Server:  `cd server && cp .env.example .env && npm install && npm run configure-auth && npm run dev`  (http://localhost:5000)
-3. Client:  `cd client && npm install && npm run dev`  (http://localhost:5173, proxies /api to the server)
+1. In `server`, run `npm install`, `npm run configure-auth`, then `npm run dev`. On Windows PowerShell use `npm.cmd` for these commands. Leave `DATABASE_URL` unset to use the local database in `server/.local-postgres`. The API listens on port 5000.
+2. In a second terminal, go to `client` and run `npm install` and `npm run dev`. Open http://localhost:5173. Create the local owner once using `SETUP_KEY` from `server/.env`.
+
+The local database starts empty and keeps its records across restarts. It is separate from the old MongoDB data and the live Neon database. To use a separate PostgreSQL server, set `DATABASE_URL` explicitly. Production requires its own `DATABASE_URL`; existing Atlas deployments must follow [POSTGRES_MIGRATION.md](POSTGRES_MIGRATION.md) before switching.
 
 ## Structure
 

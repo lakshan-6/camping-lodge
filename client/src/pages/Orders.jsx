@@ -1,25 +1,19 @@
 import ResponsiveTable from '../components/ResponsiveTable.jsx';
-import {businessISO} from '../businessTime.js';
 import { useEffect, useState, useRef } from 'react';
 import { api, lkr } from '../api.js';
 import CustomerDetails from './CustomerDetails.jsx';
 import EditOrder from './EditOrder.jsx';
-import { PhoneInput, NicInput } from '../components/ContactInputs.jsx';
-import CustomerMatches from '../components/CustomerMatches.jsx';
+import NewOrderDialog from '../components/NewOrderDialog.jsx';
 import OrderWorkspace from '../components/OrderWorkspace.jsx';
 import { can } from '../permissions.js';
 import {PageIntro,EmptyState} from '../components/UI.jsx';
 import Icon from '../components/Icon.jsx';
 
 const fmt = d => new Date(d).toLocaleString('en-LK', { timeZone:'Asia/Colombo', dateStyle: 'medium', timeStyle: 'short' });
-const periodsOf = (s, e) => Math.max(1, Math.ceil((new Date(e) - new Date(s)) / (36 * 3600 * 1000)));
-const blank = { customer: '', cq: '', newCust: false, pre: false, securityMethod:'nic', advance: '', advMethod: 'bank_transfer', nc: { name: '', phone: '', nic: '', email: '' }, start: '', end: '', lines: [{ equipment: '', quantity: 1 }] };
 
 export default function Orders({ me }) {
   const [orders, setOrders] = useState([]);
-  const [customers, setCustomers] = useState([]);
-  const [avail, setAvail] = useState([]);
-  const [form, setForm] = useState(null);
+  const [creating, setCreating] = useState(false);
   const [details, setDetails] = useState(null);
   const [editing, setEditing] = useState(null);
   const [err, setErr] = useState('');
@@ -45,35 +39,6 @@ export default function Orders({ me }) {
   const closePastDelete = () => { if (!deleting) { setPastDelete(null); setAccessKey(''); setDeleteError(''); setConfirmation(''); setDeletePreview(null); } };
   const load=()=>{const sequence=++requestSequence.current;setLoading(true);const params=new URLSearchParams({paged:'true',page:String(page),pageSize:String(pageSize),q:search,status,from,to,deleted:String(showDeleted)});return api('/orders?'+params).then(d=>{if(sequence!==requestSequence.current)return;setOrders(d.rows);setTotalRows(d.total);setErr('');const max=Math.max(1,Math.ceil(d.total/pageSize));if(page>max)setPage(max);}).catch(e=>{if(sequence===requestSequence.current)setErr(e.message);}).finally(()=>{if(sequence===requestSequence.current)setLoading(false);});};
   useEffect(()=>{setLoading(true);const timer=setTimeout(load,250);return()=>{clearTimeout(timer);requestSequence.current++;};},[showDeleted,search,status,from,to,page,pageSize]);
-  useEffect(() => { api('/customers').then(setCustomers); }, []);
-
-  const ready = form && form.start && form.end && new Date(form.start) < new Date(form.end);
-  useEffect(() => {
-    if (!ready) return setAvail([]);
-    const p = new URLSearchParams({ start: businessISO(form.start), end: businessISO(form.end) });
-    api('/availability?' + p).then(d => setAvail(d.items)).catch(e => setErr(e.message));
-  }, [form?.start, form?.end]);
-
-  const periods = ready ? periodsOf(form.start, form.end) : 0;
-  const total = !ready ? 0 : form.lines.reduce((s, l) => {
-    const a = avail.find(x => x._id === l.equipment); return s + (a ? a.periodRate * l.quantity * periods : 0);
-  }, 0);
-  const cq = (form?.cq || '').toLowerCase();
-  const matches = customers.filter(c => !cq || [c.name, c.phone, c.nic].some(v => (v || '').toLowerCase().includes(cq)));
-  const mode = !form ? 'existing' : form.newCust ? (form.pre ? 'pre' : 'new') : 'existing';
-  const setNc = (k, v) => setForm({ ...form, nc: { ...form.nc, [k]: v } });
-  const setLine = (i, k, v) => setForm({ ...form, lines: form.lines.map((l, j) => j === i ? { ...l, [k]: v } : l) });
-
-  async function save(e) {
-    e.preventDefault(); if(saving)return;setSaving(true);setErr('');
-    try {
-      let customer = form.customer;
-      if (form.newCust) { const c = await api('/customers', { method: 'POST', body: { ...form.nc, preBooking: form.pre&&!form.detailsNow, confirmDifferentPerson:form.confirmDifferentPerson,requestId:form.customerRequestId } }); customer = c._id; setCustomers([...customers.filter(x=>x._id!==c._id), c]); }
-      await api('/orders', { method: 'POST', body: { customer, startDate: businessISO(form.start),
-        endDate: businessISO(form.end), securityMethod:form.securityMethod, items: form.lines.filter(l => l.equipment), advance: { amount: +form.advance || 0, method: form.advMethod },requestId:form.requestId } });
-      setForm(null); load();
-    } catch (x) { setErr(x.message); } finally { setSaving(false); }
-  }
   async function cancel(o) {
     setCancelling({order:o,action:'pending',method:'cash',reason:'',requestId:crypto.randomUUID()});
   }
@@ -98,11 +63,11 @@ export default function Orders({ me }) {
   return (
     <>
       <PageIntro eyebrow="Bookings & rentals" title="The next adventure starts here." description="Create bookings, find an existing order and keep every pickup and return on schedule."/>
-      <div className="bar">{can(me,'orders.write')&&<button className="btn" onClick={() => { setErr(''); setForm({...blank,requestId:crypto.randomUUID(),customerRequestId:crypto.randomUUID()}); }}><Icon name="plus" size={17}/>New order</button>}
+      <div className="bar">{can(me,'orders.write')&&<button className="btn" onClick={() => { setErr(''); setCreating(true); }}><Icon name="plus" size={17}/>New order</button>}
         {me?.role === 'owner' && <label className="check"><input type="checkbox" checked={showDeleted} onChange={e => {setShowDeleted(e.target.checked);setStatus('');setPage(1);}} /> Previously hidden past orders</label>}
       </div>
       <div className="bar filter-panel"><label>Search orders<input type="search" placeholder="Order no., customer, phone or NIC" maxLength={80} value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}/></label><label>Status<select value={status} disabled={showDeleted} onChange={e=>{setStatus(e.target.value);setPage(1);}}><option value="">All statuses</option>{['reserved','active','completed','cancelled'].map(s=><option key={s} value={s}>{s}</option>)}</select></label><label>Pickup from<input type="date" value={from} onChange={e=>{setFrom(e.target.value);setPage(1);}}/></label><label>Pickup to<input type="date" value={to} onChange={e=>{setTo(e.target.value);setPage(1);}}/></label><button onClick={()=>{setSearch('');setStatus('');setFrom('');setTo('');setPage(1);}}>Clear filters</button></div>
-      {err && !form && <p className="bad">{err}</p>}
+      {err && !creating && <p className="bad">{err}</p>}
       {loading&&<p role="status">Loading orders…</p>}
       {orders.length === 0 ? <EmptyState title={loading?'Loading your orders…':'No matching orders'} description="Adjust the filters or create a new order to get started."/> : (
         <div className="tablewrap"><ResponsiveTable>
@@ -121,7 +86,7 @@ export default function Orders({ me }) {
       {editing && <EditOrder order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {workspace&&<OrderWorkspace id={workspace} me={me} onClose={()=>setWorkspace(null)} onSaved={load}/>}
       {cancelling&&<div className="modal"><form onSubmit={async e=>{e.preventDefault();if(saving)return;setSaving(true);try{await api(`/orders/${cancelling.order._id}/cancel`,{method:'PATCH',body:cancelling});setCancelling(null);load();}catch(x){setErr(x.message);}finally{setSaving(false);}}}><h2>Cancel {cancelling.order.orderNo}</h2><p>No bank transfer is made by this form. Choose what actually happened to the advance.</p><label>Advance payment action<select value={cancelling.action} onChange={e=>setCancelling({...cancelling,action:e.target.value})}><option value="pending">Refund pending</option>{can(me,'payments.refund')&&<><option value="refund">Refund has been paid to customer</option><option value="keep">Keep advance as agreed cancellation fee</option></>}</select></label><label>Reason<input required value={cancelling.reason} onChange={e=>setCancelling({...cancelling,reason:e.target.value})}/></label><label>Refund method<select value={cancelling.method} onChange={e=>setCancelling({...cancelling,method:e.target.value})}><option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="other">Other</option></select></label>{err&&<p className="bad">{err}</p>}<div className="bar"><button type="button" disabled={saving} onClick={()=>setCancelling(null)}>Close</button><button className="btn" disabled={saving}>Confirm cancellation</button></div></form></div>}
-      {details && <CustomerDetails customer={details} onClose={() => setDetails(null)} onSaved={() => { setDetails(null); load(); api('/customers').then(setCustomers); }} />}
+      {details && <CustomerDetails customer={details} onClose={() => setDetails(null)} onSaved={() => { setDetails(null); load(); }} />}
       {pastDelete && (
         <div className="modal" onClick={closePastDelete}>
           <form onClick={e => e.stopPropagation()} onSubmit={removePast}>
@@ -143,58 +108,7 @@ export default function Orders({ me }) {
           </form>
         </div>
       )}
-      {form && (
-        <div className="modal" onClick={() => setForm(null)}>
-          <form style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()} onSubmit={save}>
-            <h2>New order</h2>
-            <label>Rental security<select value={form.securityMethod} onChange={e=>setForm({...form,securityMethod:e.target.value})}><option value="nic">Keep customer NIC</option><option value="money">Refundable money deposit</option></select></label>
-            <p className="hint">Choose the planned security now. Confirm the physical NIC or money actually received at handover.</p>
-            <div className="custbox">
-              <div className="row3">
-                {[['existing', 'Existing'], ...(can(me,'customers.write')?[['new', 'New customer'], ['pre', 'WhatsApp pre-booking']]:[])].map(([m, l]) => (
-                  <button type="button" key={m} className={mode === m ? 'btn' : ''} onClick={() => setForm({ ...form, newCust: m !== 'existing', pre: m === 'pre' })}>{l}</button>))}
-              </div>
-              {mode === 'existing' ? <>
-                <label>Search (name, phone or NIC)<input value={form.cq} onChange={e => setForm({ ...form, cq: e.target.value })} /></label>
-                <select required value={form.customer} onChange={e => setForm({ ...form, customer: e.target.value })}>
-                  <option value="">Choose customer ({matches.length})</option>
-                  {matches.map(c => <option key={c._id} value={c._id}>{c.name} · {c.phone}{c.nic ? ' · ' + c.nic : ''}</option>)}</select></> : <>
-                {mode === 'pre' && <p className="hint">For bookings made on WhatsApp. Only the WhatsApp number is needed now. Add the full details when the customer comes to the shop.</p>}
-                <label>{mode === 'pre' ? 'WhatsApp number' : 'Phone'}<PhoneInput required value={form.nc.phone} onChange={v => setNc('phone', v)} /></label>
-                <CustomerMatches phone={form.nc.phone} nic={form.nc.nic} onChoose={c=>{setCustomers([...customers.filter(x=>x._id!==c._id),c]);setForm({...form,customer:c._id,newCust:false,pre:false});}} confirmDifferent={form.confirmDifferentPerson} onConfirmDifferent={v=>setForm({...form,confirmDifferentPerson:v})}/>
-                {mode==='pre'&&<button type="button" onClick={()=>setForm({...form,detailsNow:!form.detailsNow})}>{form.detailsNow?'Collect customer details at pickup':'Add customer details now'}</button>}
-                {(mode!=='pre'||form.detailsNow)&&<><label>Name<input required value={form.nc.name} onChange={e => setNc('name', e.target.value)} /></label>
-                <div className="row">
-                  <label>NIC<NicInput required={mode==='pre'} value={form.nc.nic} onChange={v => setNc('nic', v)} /></label>
-                  <label>Email (optional)<input type="email" value={form.nc.email} onChange={e => setNc('email', e.target.value)} /></label>
-                </div></>}</>}
-            </div>
-            <div className="row">
-              <label>Pickup (Sri Lanka time)<input required type="datetime-local" value={form.start} onChange={e => setForm({ ...form, start: e.target.value })} /></label>
-              <label>Return (Sri Lanka time)<input required type="datetime-local" value={form.end} onChange={e => setForm({ ...form, end: e.target.value })} /></label>
-            </div>
-            {ready ? <p>{periods} rental period{periods > 1 ? 's' : ''} (36 hours each)</p> : <p>Choose pickup and return times to see available items.</p>}
-            {ready && <div className="lines">
-              {form.lines.map((l, i) => (
-                <div className="line" key={i}>
-                  <select value={l.equipment} onChange={e => setLine(i, 'equipment', e.target.value)}>
-                    <option value="">Choose item</option>
-                    {avail.map(a => <option key={a._id} value={a._id} disabled={a.available < 1}>{a.name} ({a.available} free) · {lkr(a.periodRate)}</option>)}</select>
-                  <input type="number" min="1" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
-                  <button type="button" onClick={() => setForm({ ...form, lines: form.lines.filter((_, j) => j !== i) })}>Remove</button>
-                </div>))}
-              <button type="button" onClick={() => setForm({ ...form, lines: [...form.lines, { equipment: '', quantity: 1 }] })}>Add item</button>
-              <p><b>Total: {lkr(total)}</b></p>
-              <div className="row">
-                {can(me,'payments.record')&&<label>Rental advance paid (LKR, optional)<input type="number" min="0" step="0.01" value={form.advance} onChange={e => setForm({ ...form, advance: e.target.value })} /></label>}
-                <label>Paid by<select value={form.advMethod} onChange={e => setForm({ ...form, advMethod: e.target.value })}>
-                  <option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option><option value="card">Card</option><option value="other">Other</option></select></label>
-              </div>
-            </div>}
-            {err && <p className="bad">{err}</p>}
-            <div className="row end"><button type="button" disabled={saving} onClick={() => setForm(null)}>Cancel</button><button className="btn" disabled={!ready||saving}>{saving?'Saving…':'Create order'}</button></div>
-          </form>
-        </div>)}
+      {creating && <NewOrderDialog me={me} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); setPage(1); load(); }} />}
     </>
   );
 }
