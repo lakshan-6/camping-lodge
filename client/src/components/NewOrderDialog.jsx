@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
+import { businessISO } from '../businessTime.js';
 import { can } from '../permissions.js';
 import CustomerDetails from '../pages/CustomerDetails.jsx';
 import { NicInput, PhoneInput } from './ContactInputs.jsx';
@@ -19,8 +20,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
   const [lookupAttempt, setLookupAttempt] = useState(0);
   const [confirmDifferent, setConfirmDifferent] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
-  const [pickupDate, setPickupDate] = useState('');
-  const [plannedReturnDate, setPlannedReturnDate] = useState('');
+  const [start, setStart] = useState(''), [end, setEnd] = useState('');
   const [lines, setLines] = useState(() => [newLine()]);
   const [availability, setAvailability] = useState(null);
   const [advance, setAdvance] = useState(''), [advanceMethod, setAdvanceMethod] = useState('');
@@ -41,16 +41,17 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
     return () => { active = false; clearTimeout(timer); };
   }, [lookupKey, lookupAttempt]);
 
+  const range = start && end && start < end ? `${start}/${end}` : '';
   useEffect(() => {
-    if (!pickupDate) return;
+    if (!range) return;
     let active = true;
-    const params = new URLSearchParams({ pickupDate });
-    api('/availability?' + params).then(data => { if (active) setAvailability({ pickupDate, ...data }); })
-      .catch(e => { if (active) setAvailability({ pickupDate, error: e.message }); });
+    const params = new URLSearchParams({ start: businessISO(start), end: businessISO(end) });
+    api('/availability?' + params).then(data => { if (active) setAvailability({ range, ...data }); })
+      .catch(e => { if (active) setAvailability({ range, error: e.message }); });
     return () => { active = false; };
-  }, [pickupDate]);
+  }, [range, start, end]);
 
-  const dates = availability?.pickupDate === pickupDate ? availability : null;
+  const dates = availability?.range === range ? availability : null;
   const items = dates?.items || [];
   const chosen = lines.map(line => items.find(i => i._id === line.equipment));
   const itemsReady = !!dates?.items && lines.every((l, i) => chosen[i] && Number.isInteger(+l.quantity) && +l.quantity >= 1 && +l.quantity <= chosen[i].available);
@@ -70,14 +71,14 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
 
   async function save(e) {
     e.preventDefault();
-    if (saving || !itemsReady || !customerReady || !plannedReturnDate || plannedReturnDate < pickupDate) return;
+    if (saving || !itemsReady || !customerReady) return;
     if (!complete(contact)) { setError('Enter a valid NIC, full name and phone number.'); return; }
     setSaving(true); setError('');
     try {
       const saved = await api('/orders', { method: 'POST', body: {
         customerDetails: { nic: customer.nic, name: contact.name, phone: contact.phone,
           email: contact.email, address: contact.address, confirmDifferentPerson: confirmDifferent },
-        pickupDate, plannedReturnDate,
+        startDate: businessISO(start), endDate: businessISO(end),
         items: lines.map(({ equipment, quantity }) => ({ equipment, quantity: Number(quantity) })),
         requestId,
         advance: { amount: Number(advance), method: advanceMethod }
@@ -118,24 +119,25 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
         <fieldset className="new-order-section" disabled={saving}>
           <legend>Order details</legend>
           <div className="new-order-grid">
-            <label><span>Pickup date<Required/></span><input required type="date" value={pickupDate} onChange={e => { setPickupDate(e.target.value); setAvailability(null); }} /></label>
-            <label><span>Planned return date<Required/></span><input required type="date" min={pickupDate || undefined} value={plannedReturnDate} onChange={e => setPlannedReturnDate(e.target.value)} /></label>
+            <label><span>Pickup date &amp; time<Required/></span><input required type="datetime-local" value={start} onChange={e => { setStart(e.target.value); setAvailability(null); }} /></label>
+            <label><span>Return date &amp; time<Required/></span><input required type="datetime-local" value={end} onChange={e => { setEnd(e.target.value); setAvailability(null); }} /></label>
           </div>
-          <p>Choose dates in Sri Lanka. The return deadline is set 36 hours after pickup is confirmed.</p>
-          {pickupDate && !dates && <p role="status">Checking available items…</p>}
+          <p>Sri Lanka time. Each rental period is 36 hours.</p>
+          {!range && <p>{start && end ? 'Return must be after pickup.' : 'Choose pickup and return times to check available items.'}</p>}
+          {range && !dates && <p role="status">Checking available items…</p>}
           {dates?.error && <p className="bad" role="alert">{dates.error}</p>}
           <div className="lines">
             {lines.map((line, i) => <div className="line new-order-line" key={line.key}>
               <label><span>{i === 0 ? 'Choose item' : `Item ${i + 1}`}<Required/></span><select required disabled={!dates?.items} value={line.equipment} onChange={e => setLine(line.key, { equipment: e.target.value, quantity: 1 })}>
                 <option value="">Select equipment</option>
                 {line.equipment && !chosen[i] && <option value={line.equipment} disabled>Unavailable for these dates</option>}
-                {items.map(item => <option key={item._id} value={item._id} disabled={item.available < 1 || lines.some(l => l.key !== line.key && l.equipment === item._id)}>{item.name} ({item.available} free) · {lkr(item.periodRate)}</option>)}
+                {items.map(item => <option key={item._id} value={item._id} disabled={item.available < 1 || lines.some(l => l.key !== line.key && l.equipment === item._id)}>{item.name} ({item.available} free) · {lkr(item.periodRate)} / 36h</option>)}
               </select></label>
               <label>Quantity<input required aria-label={`Quantity for item ${i + 1}`} type="number" min={1} max={chosen[i]?.available || undefined} step={1} disabled={!chosen[i]} value={line.quantity} onChange={e => setLine(line.key, { quantity: e.target.value })} /></label>
               {lines.length > 1 && <button type="button" aria-label={`Remove item ${i + 1}`} onClick={() => setLines(old => old.filter(l => l.key !== line.key))}>Remove</button>}
             </div>)}
             <button type="button" disabled={!itemsReady || lines.length >= 100 || !items.some(item => item.available > 0 && !lines.some(l => l.equipment === item._id))} onClick={() => setLines(old => [...old, newLine()])}>Add item</button>
-            {dates?.items && <p className="new-order-total">Rental total <strong>{lkr(total)}</strong> · {dates.periods} period{dates.periods === 1 ? '' : 's'}</p>}
+            {itemsReady && <p className="new-order-total">Rental total <strong>{lkr(total)}</strong> · {dates.periods} × 36h</p>}
           </div>
         </fieldset>
 
