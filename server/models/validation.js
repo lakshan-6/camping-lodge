@@ -154,6 +154,9 @@ export const Settings = model('Settings', new Schema({
   address: { type: String, default: '' },
   lateFeePercent: { type: Number, default: 100, min: 0 },  // Retained for older settings and backups.
   graceMinutes: { type: Number, default: 0, min: 0, max: 1440 },
+  lateFeeIntervalHours: { type: Number, min: 0.01 },
+  lateFeeStepPercent: { type: Number, min: 0, max: 100 },
+  lateFeeFullRateAfterHours: { type: Number, min: 0.01 },
 }, opts));
 
 export const DepositTransaction = model('DepositTransaction', new Schema({

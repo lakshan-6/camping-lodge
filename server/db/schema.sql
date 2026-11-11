@@ -332,6 +332,9 @@ CREATE TABLE "settings" (
   "address" text,
   "lateFeePercent" numeric(16,2) CHECK ("lateFeePercent" >= 0),
   "graceMinutes" bigint CHECK ("graceMinutes" >= 0) CHECK ("graceMinutes" <= 1440),
+  "lateFeeIntervalHours" numeric(16,2) CHECK ("lateFeeIntervalHours" >= 0.01),
+  "lateFeeStepPercent" numeric(16,2) CHECK ("lateFeeStepPercent" >= 0) CHECK ("lateFeeStepPercent" <= 100),
+  "lateFeeFullRateAfterHours" numeric(16,2) CHECK ("lateFeeFullRateAfterHours" >= 0.01),
   "_id" text PRIMARY KEY CHECK ("_id" ~ '^[a-f0-9]{24}$'),
   "createdAt" timestamptz,
   "updatedAt" timestamptz

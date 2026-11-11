@@ -94,7 +94,7 @@ r.post('/:id/extend',requirePermission('rentals.write'),wrap(async(req,res)=>{
  const avail=new Map((await availability(rental.dueDate,newDue,order._id,session)).map(i=>[String(i._id),i]));
  for(const i of lines)if(i.remaining>(avail.get(String(i.equipment._id))?.available||0))throw httpErr(409,'Extension overlaps another booking');
  const settings=await getSettings(session),rate=lines.reduce((s,i)=>s+i.remaining*i.periodRate,0);
- const {lateFee}=lateFeeInfo(rental,lines,settings.graceMinutes,now);
+ const {lateFee}=lateFeeInfo(rental,lines,settings,now);
  const extra=money(rate*periods+lateFee,'Extension charge',true),oldDue=rental.dueDate;
  rental.dueDate=newDue;rental.latePeriodsCharged=0;rental.lateFeePercentCharged=0;await rental.save({session});order.endDate=newDue;order.periods+=periods;order.extensionFees=(order.extensionFees||0)+extra;order.totalAmount+=extra;await order.save({session});
  await syncInvoice(order,session);await audit(session,req.user,'rental.extended',order._id,{dueDate:oldDue},{dueDate:newDue,fee:extra});return {ok:true,dueDate:newDue,extra};

@@ -15,7 +15,7 @@ r.get('/preview/:rental',wrap(async(req,res)=>{
  const rental=await Rental.findById(req.params.rental);if(!rental||rental.status==='returned')throw httpErr(404,'Rental not found');
  const order=await Order.findById(rental.order),lines=await remainingLines(order._id);
  const settings=await getSettings();
- res.json({...lateFeeInfo(rental,lines,settings.graceMinutes),balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),items:lines,checklist:rental.pickupChecklist||[],securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
+ res.json({...lateFeeInfo(rental,lines,settings),balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),items:lines,checklist:rental.pickupChecklist||[],securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
 }));
 r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  let orderId;
@@ -38,7 +38,7 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  const required=(rental.pickupChecklist||[]).map(i=>i.label),confirmed=new Set((req.body.checklist||[]).filter(i=>i.checked).map(i=>i.label));
  if(complete&&required.some(label=>!confirmed.has(label)))throw httpErr(400,'Confirm all return checklist items');
  const settings=await getSettings(session),returnedAt=new Date();
- const late=lateFeeInfo(rental,lines,settings.graceMinutes,+returnedAt),waived=money(req.body.waivedFee||0,'Waived fee',true);
+ const late=lateFeeInfo(rental,lines,settings,+returnedAt),waived=money(req.body.waivedFee||0,'Waived fee',true);
  if(waived>late.lateFee)throw httpErr(400,'Waiver exceeds the late fee');if(waived){assertPermission(req.user,'fees.waive');if(!req.body.waiverReason?.trim())throw httpErr(400,'Enter a fee waiver reason');}
  const lateFee=money(late.lateFee-waived,'Late fee',true),damageFee=money(req.body.damageFee||0,'Damage fee',true),balanceBefore=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
  const paid=req.body.paid||{};

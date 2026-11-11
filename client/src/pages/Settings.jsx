@@ -16,8 +16,12 @@ export default function Settings({ onSaved }) {
       <label>Business name<input required value={f.businessName} onChange={set('businessName')} /></label>
       <label>Phone / WhatsApp<input value={f.phone} onChange={set('phone')} /></label>
       <label>Address (shown on invoices)<input value={f.address} onChange={set('address')} /></label>
+      <h3>Late fees</h3>
       <label>Late return grace period (minutes)<input type="number" min="0" max="1440" step="1" value={f.graceMinutes||0} onChange={set('graceMinutes')}/></label>
-      <p>After the grace period, each completed 2 hours adds 10% of the item rate. More than 12 hours costs one full 36-hour rate.</p>
+      <label>Charge interval (hours)<input required type="number" min="0.01" step="0.01" value={f.lateFeeIntervalHours} onChange={set('lateFeeIntervalHours')}/></label>
+      <label>Item rate charged per interval (%)<input required type="number" min="0" max="100" step="0.01" value={f.lateFeeStepPercent} onChange={set('lateFeeStepPercent')}/></label>
+      <label>Charge the full item rate after (hours)<input required type="number" min="0.01" step="0.01" value={f.lateFeeFullRateAfterHours} onChange={set('lateFeeFullRateAfterHours')}/></label>
+      <p>After the grace period, the fee increases for each completed interval, up to one full item rate.</p>
       <p>Rental period length is fixed at 36 hours. Currency is LKR.</p>
       {msg && <p className={msg === 'Saved.' ? 'ok' : 'bad'}>{msg}</p>}
       <div><button className="btn">Save settings</button></div>

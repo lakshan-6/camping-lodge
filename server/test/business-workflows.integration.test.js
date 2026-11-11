@@ -6,7 +6,7 @@ import {once} from 'node:events';
 import * as M from '../models/index.js';
 import {requireAuth,sign,hashPassword} from '../utils/auth.js';
 import {initializeDocumentNumbers} from '../utils/documentNumbers.js';
-import {getSettings} from '../routes/settings.js';
+import settingsRoutes,{getSettings} from '../routes/settings.js';
 import {localDate} from '../utils/businessTime.js';
 import {lateFeeInfo} from '../utils/lateFees.js';
 import {testDatabase} from './helpers/database.js';
@@ -28,10 +28,14 @@ test('late fee increases every two completed hours and caps at one period after 
  const dueDate=new Date('2026-11-11T04:30:00Z'),lines=[{remaining:1,periodRate:1000}];
  const hour=3600000;
  for(const [delay,fee] of [[-1,0],[hour,0],[2*hour-1,0],[2*hour,100],[4*hour,200],[12*hour,600],[12*hour+1,1000],[38*hour,1000]]){
-  assert.equal(lateFeeInfo({dueDate},lines,0,+dueDate+delay).lateFee,fee);
+  assert.equal(lateFeeInfo({dueDate},lines,{},+dueDate+delay).lateFee,fee);
  }
- assert.equal(lateFeeInfo({dueDate},lines,30,+dueDate+2*hour).lateFee,0);
- assert.equal(lateFeeInfo({dueDate,latePeriodsCharged:1},lines,0,+dueDate+38*hour).lateFee,0);
+ assert.equal(lateFeeInfo({dueDate},lines,{graceMinutes:30},+dueDate+2*hour).lateFee,0);
+ assert.equal(lateFeeInfo({dueDate,latePeriodsCharged:1},lines,{},+dueDate+38*hour).lateFee,0);
+ const custom={lateFeeIntervalHours:1.5,lateFeeStepPercent:7.5,lateFeeFullRateAfterHours:8};
+ assert.equal(lateFeeInfo({dueDate},lines,custom,+dueDate+3*hour).lateFee,150);
+ assert.equal(lateFeeInfo({dueDate,lateFeePercentCharged:20},lines,custom,+dueDate+3*hour).lateFee,0);
+ assert.equal(lateFeeInfo({dueDate},lines,{...custom,lateFeeStepPercent:60},+dueDate+3*hour).lateFee,1000);
 });
 test('business workflows against an isolated PostgreSQL database',{timeout:120000},async t=>{
  const cleanup=await testDatabase();t.after(cleanup);await initializeDocumentNumbers();await getSettings();
@@ -40,7 +44,7 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
  const staff=await M.User.create({name:'Staff',username:'staff',passwordHash,role:'staff',lastSeenAt:new Date()});
  let ownerToken=sign(owner),staffToken=sign(staff);
  const app=express();app.use(express.json({limit:'16mb'}));app.use(requireAuth);
- for(const [path,router]of Object.entries({customers:customerRoutes,equipment:equipmentRoutes,orders:orderRoutes,availability:availabilityRoutes,rentals:rentalRoutes,returns:returnRoutes,payments:paymentRoutes,reports,stats,manage,backups,users}))app.use('/'+path,router);
+ for(const [path,router]of Object.entries({customers:customerRoutes,equipment:equipmentRoutes,orders:orderRoutes,availability:availabilityRoutes,rentals:rentalRoutes,returns:returnRoutes,payments:paymentRoutes,settings:settingsRoutes,reports,stats,manage,backups,users}))app.use('/'+path,router);
  app.use((e,req,res,next)=>res.status(e.status||(e.name==='ValidationError'?400:500)).json({error:e.message}));
  const server=app.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(r=>server.close(r)));const base=`http://127.0.0.1:${server.address().port}`;
  const request=async(path,method='GET',body,token=ownerToken)=>{const response=await fetch(base+path,{method,headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},...(body?{body:JSON.stringify(body)}:{})});const text=await response.text();let data;try{data=JSON.parse(text);}catch{data=text;}return {status:response.status,data};};
@@ -308,6 +312,24 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   const extended=await ok('/rentals/'+another._id+'/extend','POST',{periods:1});
   assert.equal(extended.extra,1200);
   assert.equal((await M.Rental.findById(another._id)).lateFeePercentCharged,0);
+
+  const original=await ok('/settings');
+  assert.equal(original.lateFeeIntervalHours,2);assert.equal(original.lateFeeStepPercent,10);assert.equal(original.lateFeeFullRateAfterHours,12);
+  const custom={lateFeeIntervalHours:1.5,lateFeeStepPercent:7.5,lateFeeFullRateAfterHours:8};
+  const currentStaffToken=sign(await M.User.findById(staff._id));
+  assert.equal((await request('/settings','PUT',custom,currentStaffToken)).status,403);
+  assert.equal((await request('/settings','PUT',{lateFeeIntervalHours:0})).status,400);
+  assert.equal((await request('/settings','PUT',{lateFeeStepPercent:101})).status,400);
+  assert.equal((await request('/settings','PUT',{lateFeeFullRateAfterHours:''})).status,400);
+  const updated=await ok('/settings','PUT',custom);
+  assert.equal(updated.businessName,original.businessName);
+  assert.equal((await ok('/settings')).lateFeeStepPercent,7.5);
+  await setHoursLate(another._id,9);
+  assert.equal((await ok('/returns/preview/'+another._id)).lateFee,1000);
+  await setHoursLate(another._id,6.1);
+  assert.equal((await ok('/returns/preview/'+another._id)).lateFee,300);
+  assert.equal((await ok('/rentals/'+another._id+'/extend','POST',{periods:1})).extra,1300);
+  await ok('/settings','PUT',original);
  });
  await t.test('pickup supports full payment and deferring the balance until return',async()=>{
   const contact=await M.Customer.create({name:'Pay at handover',phone:'0776699011',nic:'200500112250'});
