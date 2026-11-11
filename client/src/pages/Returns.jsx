@@ -17,6 +17,7 @@ export default function Returns({me}){
  const setItem=(index,key,value)=>updateItems(form.items.map((i,n)=>index===n?{...i,[key]:value}:i));
  function setUnit(index,unit,condition){updateItems(form.items.map((i,n)=>{if(n!==index)return i;const units=i.units.map(u=>u.unit===unit?{...u,condition}:u);return {...i,units,quantityReturned:units.filter(u=>u.condition==='good').length,quantityDamaged:units.filter(u=>u.condition==='damaged').length,quantityLost:units.filter(u=>u.condition==='lost').length};}));}
  const complete=form&&form.items.every(i=>Number(i.quantityReturned)+Number(i.quantityDamaged)+Number(i.quantityLost)===i.remaining);
+ const equipmentIssue=form&&hasEquipmentIssue(form.items);
  function setAccessory(index,changes){
   setForm({...form,checklist:form.checklist.map((entry,n)=>index===n?{...entry,...changes}:entry)});
  }
@@ -39,10 +40,28 @@ export default function Returns({me}){
  {workspace&&<OrderWorkspace id={workspace} me={me} onClose={()=>setWorkspace(null)} onSaved={load}/>}
  {form&&<div className="modal"><form style={{maxWidth:650}} onSubmit={save}>
  <h2>Return {form.rental.order?.orderNo}</h2>
- <section className="card return-checklist" aria-labelledby="return-checklist-title">
+ {form.checklist.length>0&&<section className="card" aria-labelledby="return-checklist-title">
   <h3 id="return-checklist-title">Return checklist</h3>
   <div className="return-checklist-group">
-   <h4>Equipment</h4>
+   <p className="hint">Mark handed-out accessories as returned or missing. Leave accessories still with the customer unchecked for a partial return.</p>
+   {form.checklist.map((entry,index)=><div key={entry.key??entry.label} role="group" aria-label={entry.label}>
+    <b>{entry.label}</b>
+    <div className="row">
+     <label className="check"><input type="checkbox" checked={entry.checked} onChange={e=>setAccessory(index,{checked:e.target.checked,missing:false,fee:''})}/>Returned</label>
+     <label className="check"><input type="checkbox" checked={entry.missing} onChange={e=>setAccessory(index,{checked:false,missing:e.target.checked,fee:''})}/>Missing / lost</label>
+    </div>
+    {entry.missing&&<label>Missing accessory fee (LKR)<input type="number" min="0" max="1000000000" step="0.01" placeholder="0" value={entry.fee} onChange={e=>setAccessory(index,{fee:e.target.value})}/></label>}
+   </div>)}
+   {accessoryFee>0&&<p>Missing accessory fees <strong>{lkr(accessoryFee)}</strong></p>}
+  </div>
+ </section>}
+ <details className="card equipment-return-details" onInvalid={event=>{event.currentTarget.open=true;}}>
+  <summary>Adjust equipment return
+   <small>{complete&&!equipmentIssue
+    ?'All outstanding equipment will be recorded as returned in good condition.'
+    :[!complete&&'Partial return',equipmentIssue&&'Damaged or lost equipment'].filter(Boolean).join(' · ')}</small>
+  </summary>
+  <div className="return-checklist-group">
    <p className="hint">For a partial return, leave equipment still with the customer outstanding.</p>
    {form.items.map((item,index)=>item.remaining>0&&<div key={item.equipment} role="group" aria-label={item.name}>
     <b>{item.name} · {item.remaining} outstanding</b>
@@ -61,25 +80,11 @@ export default function Returns({me}){
      </label>)}
     </div>}
    </div>)}
-   {hasEquipmentIssue(form.items)&&<label>Equipment damage / loss charge (LKR)
+   {equipmentIssue&&<label>Equipment damage / loss charge (LKR)
     <input type="number" min="0" max="1000000000" step="0.01" value={form.damageFee} onChange={e=>setForm({...form,damageFee:e.target.value})}/>
    </label>}
-   <p><strong>{complete?'All outstanding equipment is accounted for.':'Partial return. Remaining equipment stays out.'}</strong></p>
   </div>
-  {form.checklist.length>0&&<div className="return-checklist-group">
-   <h4>Accessories</h4>
-   <p className="hint">Mark handed-out accessories as returned or missing. Leave accessories still with the customer unchecked for a partial return.</p>
-   {form.checklist.map((entry,index)=><div key={entry.key??entry.label} role="group" aria-label={entry.label}>
-    <b>{entry.label}</b>
-    <div className="row">
-     <label className="check"><input type="checkbox" checked={entry.checked} onChange={e=>setAccessory(index,{checked:e.target.checked,missing:false,fee:''})}/>Returned</label>
-     <label className="check"><input type="checkbox" checked={entry.missing} onChange={e=>setAccessory(index,{checked:false,missing:e.target.checked,fee:''})}/>Missing / lost</label>
-    </div>
-    {entry.missing&&<label>Missing accessory fee (LKR)<input type="number" min="0" max="1000000000" step="0.01" placeholder="0" value={entry.fee} onChange={e=>setAccessory(index,{fee:e.target.value})}/></label>}
-   </div>)}
-   {accessoryFee>0&&<p>Missing accessory fees <strong>{lkr(accessoryFee)}</strong></p>}
-  </div>}
- </section>
+ </details>
  {form.preview.nicHeld&&<section className="card security-card"><h3>Customer NIC is held</h3>{complete?<label className="check"><input type="checkbox" checked={form.returnNic} onChange={e=>setForm({...form,returnNic:e.target.checked})}/>I physically returned the NIC to the customer.</label>:<p>Keep the NIC until all outstanding equipment is received.</p>}<p className="hint">If the NIC stays with you, leave this unchecked. Record its return later from View order.</p></section>}
  <p>Late fee <strong>{lkr(form.preview.lateFee)}</strong>{form.preview.additionalPercent>0&&<> · {form.preview.additionalPercent}% of the outstanding item rates</>}</p>
  {can(me,'fees.waive')&&<><label>Late fee to waive (LKR)<input type="number" min="0" max={form.preview.lateFee} step="0.01" value={form.waivedFee} onChange={e=>setForm({...form,waivedFee:e.target.value})}/></label>{Number(form.waivedFee)>0&&<label>Waiver reason<input required value={form.waiverReason} onChange={e=>setForm({...form,waiverReason:e.target.value})}/></label>}</>}

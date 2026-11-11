@@ -2262,9 +2262,11 @@ td[data-actions] {
 .unit-return-list label { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr); align-items: center; gap: 12px; margin: 0; }
 @media (max-width: 400px) { .unit-return-list label { grid-template-columns: 1fr; gap: 4px; } .unit-grid { grid-template-columns: 1fr; } }
 .return-checklist-group { display: grid; gap: 10px; }
-.return-checklist-group h4, .return-checklist .return-checklist-group p { margin: 0; }
-.return-checklist-group + .return-checklist-group { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.card .return-checklist-group p { margin: 0; }
 .return-checklist-group .row3 { align-items: end; }
+.equipment-return-details > summary { cursor: pointer; font-weight: 700; }
+.equipment-return-details > summary small { display: block; margin: 6px 0 0 1em; font-weight: 400; color: var(--mute); }
+.equipment-return-details[open] .return-checklist-group { margin-top: 12px; }
 
 /* The new booking form follows the order of the conversation at the rental desk. */
 .modal form.new-order-form { max-width: 670px; }
