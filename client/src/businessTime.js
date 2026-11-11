@@ -8,9 +8,12 @@ export const formatBusinessTime = value => new Date(value).toLocaleString('en-LK
 });
 
 const hasPlannedDate = order => order.pickupDate && ['reserved', 'cancelled'].includes(order.status);
+const formatCalendarDate = value => new Date(value).toLocaleDateString('en-LK', { timeZone: 'Asia/Colombo', dateStyle: 'medium' });
 export const formatPickup = order => hasPlannedDate(order)
-  ? new Date(order.startDate).toLocaleDateString('en-LK', { timeZone: 'Asia/Colombo', dateStyle: 'medium' })
+  ? formatCalendarDate(order.startDate)
   : formatBusinessTime(order.startDate);
-export const formatReturn = order => hasPlannedDate(order)
-  ? (order.status === 'reserved' ? '36 hours after pickup' : '—')
-  : formatBusinessTime(order.endDate);
+export function formatReturn(order) {
+  if (!hasPlannedDate(order)) return formatBusinessTime(order.endDate);
+  if (order.status === 'cancelled') return '—';
+  return order.plannedReturnDate ? `${formatCalendarDate(order.plannedReturnDate)} (planned)` : '36 hours after pickup';
+}

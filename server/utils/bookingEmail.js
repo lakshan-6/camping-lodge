@@ -78,7 +78,9 @@ export function sendBookingConfirmation(orderId) {
     const [items, paid] = await Promise.all([orderItems(order), paidTotal(orderId)]);
     return { title: 'Booking confirmation', tag: 'booking-confirmation', intro: 'Your rental booking is confirmed. Here are your order details.', details: [
       ...(order.pickupDate
-        ? [['Pickup date (Sri Lanka)', formatPickupDate.format(new Date(order.startDate))], ['Return deadline', '36 hours after pickup']]
+        ? [['Pickup date (Sri Lanka)', formatPickupDate.format(new Date(order.startDate))],
+           ...(order.plannedReturnDate ? [['Planned return date (Sri Lanka)', formatPickupDate.format(new Date(order.plannedReturnDate))]] : []),
+           ['Return deadline', '36 hours after pickup']]
         : [['Pickup (Sri Lanka time)', date(order.startDate)], ['Return (Sri Lanka time)', date(order.endDate)]]),
       ['Rental total', money(order.totalAmount)], ['Rental payment recorded', money(paid)], rentalBalance(order, paid),
       ['Security at pickup', order.securityMethod === 'nic' ? 'Bring your NIC' :

@@ -240,11 +240,14 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
  await t.test('date-only bookings reserve stock for the pickup day and start a 36-hour rental at handover',async()=>{
   const contact=await M.Customer.create({name:'Date-only pickup',phone:'0776699012',nic:'200500112251'});
   const gear=await ok('/equipment','POST',{name:'Date-only tent',category:'Camping',totalQuantity:1,periodRate:300});
-  const body={customer:contact._id,pickupDate:'2031-11-05',items:[{equipment:gear._id,quantity:1}],advance};
+  const body={customer:contact._id,pickupDate:'2031-11-05',plannedReturnDate:'2031-11-06',items:[{equipment:gear._id,quantity:1}],advance};
   assert.equal((await request('/orders','POST',{...body,pickupDate:'2031-02-29'})).status,400);
+  assert.equal((await request('/orders','POST',{...body,plannedReturnDate:'2031-11-04'})).status,400);
+  assert.equal((await request('/orders','POST',{...body,plannedReturnDate:'2031-11-31'})).status,400);
   assert.equal((await ok('/availability?pickupDate=2031-11-05')).periods,1);
   const booking=await ok('/orders','POST',body);
   assert.equal(booking.startDate,'2031-11-04T18:30:00.000Z');
+  assert.equal(booking.plannedReturnDate,'2031-11-06');
   assert.equal(booking.endDate,'2031-11-07T06:30:00.000Z');
   assert.equal(booking.periods,1);assert.equal(booking.totalAmount,300);
   const available=async start=>{
@@ -255,14 +258,16 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal(await available('2031-11-07T05:30:00Z'),0);
   assert.equal(await available('2031-11-07T06:30:00Z'),1);
   const today=localDate(new Date());
-  const edited=await ok('/orders/'+booking._id,'PUT',{pickupDate:today,items:body.items});
-  assert.equal(edited.pickupDate,today);assert.equal(edited.periods,1);assert.equal(edited.totalAmount,300);
+  const tomorrow=localDate(new Date(Date.now()+86400000));
+  const edited=await ok('/orders/'+booking._id,'PUT',{pickupDate:today,plannedReturnDate:tomorrow,items:body.items});
+  assert.equal(edited.pickupDate,today);assert.equal(edited.plannedReturnDate,tomorrow);assert.equal(edited.periods,1);assert.equal(edited.totalAmount,300);
   const before=Date.now();
   const rental=await ok('/rentals/start','POST',{order:booking._id,securityMethod:'nic',nicReceived:true,sendVia:'none'});
   assert.ok(+new Date(rental.pickedUpAt)>=before);
   assert.equal(new Date(rental.dueDate)-new Date(rental.pickedUpAt),36*3600000);
   const active=await ok('/orders/'+booking._id+'/detail');
   assert.equal(active.startDate,rental.pickedUpAt);assert.equal(active.endDate,rental.dueDate);
+  assert.equal(active.plannedReturnDate,tomorrow);
  });
  await t.test('pickup supports full payment and deferring the balance until return',async()=>{
   const contact=await M.Customer.create({name:'Pay at handover',phone:'0776699011',nic:'200500112250'});
@@ -335,9 +340,10 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
 
   process.env.BREVO_API_KEY='test-booking-key';providerStatus=201;requests.length=0;
   const tent=await ok('/equipment','POST',{name:'Lifecycle tent',category:'Camping',totalQuantity:2,periodRate:400,deposit:50});
-  const booking=await ok('/orders','POST',{customer:contact._id,pickupDate:localDate(new Date()),items:[{equipment:tent._id,quantity:2}],advance:{amount:25,method:'cash'},requestId:crypto.randomUUID()});
+  const booking=await ok('/orders','POST',{customer:contact._id,pickupDate:localDate(new Date()),plannedReturnDate:localDate(new Date(Date.now()+86400000)),items:[{equipment:tent._id,quantity:2}],advance:{amount:25,method:'cash'},requestId:crypto.randomUUID()});
   assert.match(requests[0].textContent,/Bring your NIC or a refundable money deposit. Choose at pickup/);
   assert.match(requests[0].textContent,/Pickup date \(Sri Lanka\):/);
+  assert.match(requests[0].textContent,/Planned return date \(Sri Lanka\):/);
   assert.match(requests[0].textContent,/Return deadline: 36 hours after pickup/);
   const preview=await ok('/rentals/pickup-preview/'+booking._id);
   assert.equal(preview.securityMethod,null);assert.equal(preview.securityHeld,0);assert.equal(preview.depositAmount,100);

@@ -3,6 +3,7 @@ import { money, methodOf, units, audit } from './operations.js';
 import { httpErr, availability, bookingWindow } from './availability.js';
 import { nextDocumentNumber } from './documentNumbers.js';
 import { assertPermission } from './permissions.js';
+import { dayRange } from './businessTime.js';
 
 export async function paidTotal(id, session = null) {
   const payments = await Payment.find({ order: id }).session(session);
@@ -59,6 +60,8 @@ export async function recordPayment(order, body, user, session) {
 export async function priceItems(body, session, exclude) {
   const window = bookingWindow(body.pickupDate,body.startDate,body.endDate);
   const { start,end,periods } = window;
+  const { plannedReturnDate } = body;
+  if(plannedReturnDate!==undefined)dayRange(window.pickupDate,plannedReturnDate);
   if (!Array.isArray(body.items) || !body.items.length || body.items.length>100) throw httpErr(400,'Choose at least one item');
   const wanted = new Map();
   for (const i of body.items) {
@@ -75,7 +78,7 @@ export async function priceItems(body, session, exclude) {
     total+=lineTotal;deposit+=quantity*item.deposit;
     return { equipment:id,quantity,periodRate:item.periodRate,periods,lineTotal,returnedQuantity:0 };
   });
-  return { ...window,lines,total:money(total,'Total',true),deposit:money(deposit,'Deposit',true) };
+  return { ...window,plannedReturnDate,lines,total:money(total,'Total',true),deposit:money(deposit,'Deposit',true) };
 }
 export async function remainingLines(order, session = null) {
   return (await OrderItem.find({order}).populate('equipment','name checklist trackUnits').session(session)).map(i=>({

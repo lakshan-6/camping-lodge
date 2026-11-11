@@ -53,6 +53,10 @@ async function migrate(){
    await query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS "pickupDate" text',[],session);
    await query('INSERT INTO schema_migrations(version) VALUES(2)',[],session);
   }
+  if(!(await query('SELECT version FROM schema_migrations WHERE version=3',[],session)).rows.length){
+   await query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS "plannedReturnDate" text',[],session);
+   await query('INSERT INTO schema_migrations(version) VALUES(3)',[],session);
+  }
  });
 }
 export async function connectDatabase(url=process.env.DATABASE_URL){

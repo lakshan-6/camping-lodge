@@ -20,6 +20,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
   const [confirmDifferent, setConfirmDifferent] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [pickupDate, setPickupDate] = useState('');
+  const [plannedReturnDate, setPlannedReturnDate] = useState('');
   const [lines, setLines] = useState(() => [newLine()]);
   const [availability, setAvailability] = useState(null);
   const [advance, setAdvance] = useState(''), [advanceMethod, setAdvanceMethod] = useState('');
@@ -69,14 +70,14 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
 
   async function save(e) {
     e.preventDefault();
-    if (saving || !itemsReady || !customerReady) return;
+    if (saving || !itemsReady || !customerReady || !plannedReturnDate || plannedReturnDate < pickupDate) return;
     if (!complete(contact)) { setError('Enter a valid NIC, full name and phone number.'); return; }
     setSaving(true); setError('');
     try {
       const saved = await api('/orders', { method: 'POST', body: {
         customerDetails: { nic: customer.nic, name: contact.name, phone: contact.phone,
           email: contact.email, address: contact.address, confirmDifferentPerson: confirmDifferent },
-        pickupDate,
+        pickupDate, plannedReturnDate,
         items: lines.map(({ equipment, quantity }) => ({ equipment, quantity: Number(quantity) })),
         requestId,
         advance: { amount: Number(advance), method: advanceMethod }
@@ -116,8 +117,11 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
 
         <fieldset className="new-order-section" disabled={saving}>
           <legend>Order details</legend>
-          <label><span>Pickup date<Required/></span><input required type="date" value={pickupDate} onChange={e => { setPickupDate(e.target.value); setAvailability(null); }} /></label>
-          <p>Choose a pickup date in Sri Lanka. Equipment is due back 36 hours after pickup is confirmed.</p>
+          <div className="new-order-grid">
+            <label><span>Pickup date<Required/></span><input required type="date" value={pickupDate} onChange={e => { setPickupDate(e.target.value); setAvailability(null); }} /></label>
+            <label><span>Planned return date<Required/></span><input required type="date" min={pickupDate || undefined} value={plannedReturnDate} onChange={e => setPlannedReturnDate(e.target.value)} /></label>
+          </div>
+          <p>Choose dates in Sri Lanka. The return deadline is set 36 hours after pickup is confirmed.</p>
           {pickupDate && !dates && <p role="status">Checking available items…</p>}
           {dates?.error && <p className="bad" role="alert">{dates.error}</p>}
           <div className="lines">

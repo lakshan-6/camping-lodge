@@ -190,6 +190,7 @@ CREATE TABLE "orders" (
   "orderNo" text,
   "customer" text NOT NULL,
   "pickupDate" text,
+  "plannedReturnDate" text,
   "startDate" timestamptz NOT NULL,
   "endDate" timestamptz NOT NULL,
   "status" text CHECK ("status" IN ('reserved','active','completed','cancelled')),

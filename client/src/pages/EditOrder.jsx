@@ -5,12 +5,13 @@ import { api, lkr } from '../api.js';
 export default function EditOrder({ order, onClose, onSaved }) {
   const dateOnly = !!order.pickupDate;
   const [start, setStart] = useState(() => order.pickupDate || businessInput(order.startDate));
-  const [end, setEnd] = useState(() => dateOnly ? '' : businessInput(order.endDate));
+  const [end, setEnd] = useState(() => dateOnly ? order.plannedReturnDate || '' : businessInput(order.endDate));
   const [lines, setLines] = useState(order.items.map(i => ({ equipment: i.equipment._id, quantity: i.quantity })));
   const [availability, setAvailability] = useState(null);
   const [err, setErr] = useState('');
-  const ok = start && (dateOnly || (end && start < end));
-  const timing = ok ? (dateOnly ? { pickupDate: start } : { startDate: businessISO(start), endDate: businessISO(end) }) : null;
+  const returnDateValid = end ? end >= start : !order.plannedReturnDate;
+  const ok = start && (dateOnly ? returnDateValid : end && start < end);
+  const timing = ok ? (dateOnly ? { pickupDate: start, plannedReturnDate: end || undefined } : { startDate: businessISO(start), endDate: businessISO(end) }) : null;
   const query = timing ? new URLSearchParams(dateOnly ? { pickupDate: timing.pickupDate, exclude: order._id }
     : { start: timing.startDate, end: timing.endDate, exclude: order._id }).toString() : '';
   useEffect(() => {
@@ -38,7 +39,10 @@ export default function EditOrder({ order, onClose, onSaved }) {
       <form style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()} onSubmit={save}>
         <h2>Change {order.orderNo}</h2>
         <p className="hint">{order.customer?.name}</p>
-        {dateOnly ? <label>Pickup date<input required type="date" value={start} onChange={e => setStart(e.target.value)} /></label> : <div className="row">
+        {dateOnly ? <div className="row">
+          <label>Pickup date<input required type="date" value={start} onChange={e => setStart(e.target.value)} /></label>
+          <label>Planned return date<input required={!!order.plannedReturnDate} type="date" min={start || undefined} value={end} onChange={e => setEnd(e.target.value)} /></label>
+        </div> : <div className="row">
           <label>Pickup (Sri Lanka time)<input required type="datetime-local" value={start} onChange={e => setStart(e.target.value)} /></label>
           <label>Return (Sri Lanka time)<input required type="datetime-local" value={end} onChange={e => setEnd(e.target.value)} /></label>
         </div>}
