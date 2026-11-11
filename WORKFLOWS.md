@@ -24,7 +24,7 @@ Tracking is optional for each equipment type. Existing items can enable it after
 
 Extend an outstanding rental from Rentals. Remaining equipment is checked against other bookings. Extra periods and any accrued late charges are added to the order and invoice. The estimate shown before saving is the extra-period charge; the saved charge includes any overdue amount after the configured grace period.
 
-For a partial return, enter only the quantities received, damaged or lost now. Remaining equipment stays out and unavailable. Lost items reduce physical stock; damaged items move into damaged stock. Final returns require the return checklist. Late charges already recorded are not charged again for the same elapsed period. Only staff with fee-waiver permission can waive a late charge, and they must provide a reason.
+For a partial return, enter only the quantities received, damaged or lost now. Remaining equipment stays out and unavailable. Lost items reduce physical stock; damaged items move into damaged stock. Final returns require the return checklist. After any configured grace period, late fees add 10% of the outstanding item rates for every two completed hours. After 12 hours the fee is capped at one full 36-hour rate per item. Partial returns and extensions account for late charges already recorded. Only staff with fee-waiver permission can waive a late charge, and they must provide a reason.
 
 Create a repair against damaged equipment, then complete it after the repair. Completion releases those units back to usable stock. Recording repair cost also creates an expense once and requires expense permission.
 

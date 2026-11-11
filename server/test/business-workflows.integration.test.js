@@ -8,6 +8,7 @@ import {requireAuth,sign,hashPassword} from '../utils/auth.js';
 import {initializeDocumentNumbers} from '../utils/documentNumbers.js';
 import {getSettings} from '../routes/settings.js';
 import {localDate} from '../utils/businessTime.js';
+import {lateFeeInfo} from '../utils/lateFees.js';
 import {testDatabase} from './helpers/database.js';
 import customerRoutes from '../routes/customers.js';
 import equipmentRoutes from '../routes/equipment.js';
@@ -23,6 +24,15 @@ import backups from '../routes/backups.js';
 import users from '../routes/users.js';
 import {createBackup,backupEnvelope,decryptSnapshot} from '../utils/backups.js';
 process.env.AUTH_SECRET=crypto.randomBytes(32).toString('hex');process.env.PAST_ORDER_DELETE_KEY='WorkflowKey123@@';process.env.BACKUP_ENCRYPTION_KEY=crypto.randomBytes(32).toString('hex');
+test('late fee increases every two completed hours and caps at one period after twelve hours',()=>{
+ const dueDate=new Date('2026-11-11T04:30:00Z'),lines=[{remaining:1,periodRate:1000}];
+ const hour=3600000;
+ for(const [delay,fee] of [[-1,0],[hour,0],[2*hour-1,0],[2*hour,100],[4*hour,200],[12*hour,600],[12*hour+1,1000],[38*hour,1000]]){
+  assert.equal(lateFeeInfo({dueDate},lines,0,+dueDate+delay).lateFee,fee);
+ }
+ assert.equal(lateFeeInfo({dueDate},lines,30,+dueDate+2*hour).lateFee,0);
+ assert.equal(lateFeeInfo({dueDate,latePeriodsCharged:1},lines,0,+dueDate+38*hour).lateFee,0);
+});
 test('business workflows against an isolated PostgreSQL database',{timeout:120000},async t=>{
  const cleanup=await testDatabase();t.after(cleanup);await initializeDocumentNumbers();await getSettings();
  const passwordHash=await hashPassword('workflow-test-password');
@@ -268,6 +278,36 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   const active=await ok('/orders/'+booking._id+'/detail');
   assert.equal(active.startDate,rental.pickedUpAt);assert.equal(active.endDate,rental.dueDate);
   assert.equal(active.plannedReturnDate,tomorrow);
+ });
+ await t.test('partial returns charge only new late fees and overdue extensions use the same rate',async()=>{
+  const contact=await M.Customer.create({name:'Late fee test',phone:'0776699013',nic:'200500112252'});
+  const gear=await ok('/equipment','POST',{name:'Late fee tent',category:'Camping',totalQuantity:2,periodRate:1000});
+  const body={customer:contact._id,...dates(),items:[{equipment:gear._id,quantity:2}],advance};
+  const pickup={securityMethod:'nic',nicReceived:true,sendVia:'none'};
+  const booking=await ok('/orders','POST',body);
+  const rented=await ok('/rentals/start','POST',{...pickup,order:booking._id});
+  const setHoursLate=(rentalId,hours)=>M.Rental.updateOne({_id:rentalId},{$set:{dueDate:new Date(Date.now()-hours*3600000)}});
+  await setHoursLate(rented._id,2.1);
+  const preview='/returns/preview/'+rented._id;
+  assert.equal((await ok(preview)).lateFee,200);
+  const first={rental:rented._id,items:[{equipment:gear._id,quantityReturned:1}],waivedFee:50,waiverReason:'Test waiver',requestId:crypto.randomUUID()};
+  assert.equal((await ok('/returns','POST',first)).lateFee,150);
+  assert.equal((await ok('/returns','POST',first))._replayed,true);
+  assert.equal((await ok(preview)).lateFee,0);
+  await setHoursLate(rented._id,13);
+  assert.equal((await ok(preview)).lateFee,900);
+  const final={rental:rented._id,items:first.items,returnNic:true,paid:{late:true},method:'cash',requestId:crypto.randomUUID()};
+  assert.equal((await request('/returns','POST',{...final,latePaymentAmount:500})).status,409);
+  assert.equal((await ok('/returns','POST',{...final,latePaymentAmount:900})).lateFee,900);
+  assert.equal((await M.Payment.findOne({order:booking._id,type:'fee'})).amount,900);
+  assert.equal((await M.Order.findById(booking._id)).totalAmount,3050);
+
+  const next=await ok('/orders','POST',{...body,items:[{equipment:gear._id,quantity:1}]});
+  const another=await ok('/rentals/start','POST',{...pickup,order:next._id});
+  await setHoursLate(another._id,4.1);
+  const extended=await ok('/rentals/'+another._id+'/extend','POST',{periods:1});
+  assert.equal(extended.extra,1200);
+  assert.equal((await M.Rental.findById(another._id)).lateFeePercentCharged,0);
  });
  await t.test('pickup supports full payment and deferring the balance until return',async()=>{
   const contact=await M.Customer.create({name:'Pay at handover',phone:'0776699011',nic:'200500112250'});

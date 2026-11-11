@@ -57,6 +57,10 @@ async function migrate(){
    await query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS "plannedReturnDate" text',[],session);
    await query('INSERT INTO schema_migrations(version) VALUES(3)',[],session);
   }
+  if(!(await query('SELECT version FROM schema_migrations WHERE version=4',[],session)).rows.length){
+   await query('ALTER TABLE rentals ADD COLUMN IF NOT EXISTS "lateFeePercentCharged" numeric(16,2) CHECK ("lateFeePercentCharged" BETWEEN 0 AND 100)',[],session);
+   await query('INSERT INTO schema_migrations(version) VALUES(4)',[],session);
+  }
  });
 }
 export async function connectDatabase(url=process.env.DATABASE_URL){

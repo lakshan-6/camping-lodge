@@ -77,6 +77,7 @@ export const Rental = model('Rental', new Schema({
   pickedUpAt: Date, dueDate: { type: Date, required: true },
   pickupChecklist: [{ label: String, checked: Boolean }],
   latePeriodsCharged: { type: Number, default: 0 },
+  lateFeePercentCharged: { type: Number, min: 0, max: 100 },
   status: { type: String, enum: ['out', 'returned', 'overdue'], default: 'out' },
 }, opts));
 
@@ -151,7 +152,7 @@ export const Settings = model('Settings', new Schema({
   businessName: { type: String, default: 'Camping Lodge' },
   phone: { type: String, default: '071 552 4499' },
   address: { type: String, default: '' },
-  lateFeePercent: { type: Number, default: 100, min: 0 },  // % of the rental rate charged per extra 36h period
+  lateFeePercent: { type: Number, default: 100, min: 0 },  // Retained for older settings and backups.
   graceMinutes: { type: Number, default: 0, min: 0, max: 1440 },
 }, opts));
 

@@ -268,6 +268,7 @@ CREATE TABLE "rentals" (
   "dueDate" timestamptz NOT NULL,
   "pickupChecklist" jsonb,
   "latePeriodsCharged" bigint,
+  "lateFeePercentCharged" numeric(16,2) CHECK ("lateFeePercentCharged" >= 0) CHECK ("lateFeePercentCharged" <= 100),
   "status" text CHECK ("status" IN ('out','returned','overdue')),
   "_id" text PRIMARY KEY CHECK ("_id" ~ '^[a-f0-9]{24}$'),
   "createdAt" timestamptz,

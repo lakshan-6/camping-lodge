@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { Order, Rental, Return, ReturnItem, OrderItem, Equipment, InventoryTransaction } from '../models/index.js';
-import { PERIOD_MS,httpErr } from '../utils/availability.js';
+import { httpErr } from '../utils/availability.js';
 import { getSettings } from './settings.js';
 import { mutate,audit,money,units,PAYMENT_METHODS } from '../utils/operations.js';
 import { requirePermission,assertPermission } from '../utils/permissions.js';
@@ -8,17 +8,14 @@ import { paidTotal,rentalBalanceDue,remainingLines,recordPayment,syncInvoice } f
 import {returnUnitRows,receiveUnits,assertUnitTotals} from '../utils/equipmentUnits.js';
 import {nicHeld,releaseNic} from '../utils/securityDeposit.js';
 import { sendReturnUpdate } from '../utils/bookingEmail.js';
+import { lateFeeInfo } from '../utils/lateFees.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
-async function lateInfo(rental,lines,session=null){
- const settings=await getSettings(session);const late=Date.now()-+rental.dueDate-(settings.graceMinutes||0)*60000;
- const total=late>0?Math.ceil(late/PERIOD_MS):0,extra=Math.max(0,total-(rental.latePeriodsCharged||0));
- return {extraPeriods:extra,totalLatePeriods:total,lateFee:Math.round(extra*lines.reduce((s,i)=>s+i.remaining*i.periodRate,0)*settings.lateFeePercent)/100};
-}
 r.get('/',wrap(async(req,res)=>res.json(await Return.find().sort({returnedAt:-1}).limit(200).populate({path:'rental',populate:[{path:'customer',select:'name'},{path:'order',select:'orderNo status securityMethod nicHeldAt nicReturnedAt'}]}).lean())));
 r.get('/preview/:rental',wrap(async(req,res)=>{
  const rental=await Rental.findById(req.params.rental);if(!rental||rental.status==='returned')throw httpErr(404,'Rental not found');
  const order=await Order.findById(rental.order),lines=await remainingLines(order._id);
- res.json({...await lateInfo(rental,lines),balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),items:lines,checklist:rental.pickupChecklist||[],securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
+ const settings=await getSettings();
+ res.json({...lateFeeInfo(rental,lines,settings.graceMinutes),balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),items:lines,checklist:rental.pickupChecklist||[],securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
 }));
 r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  let orderId;
@@ -40,16 +37,19 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  const complete=rows.every(r=>r.n===r.line.remaining);
  const required=(rental.pickupChecklist||[]).map(i=>i.label),confirmed=new Set((req.body.checklist||[]).filter(i=>i.checked).map(i=>i.label));
  if(complete&&required.some(label=>!confirmed.has(label)))throw httpErr(400,'Confirm all return checklist items');
- const late=await lateInfo(rental,lines,session),waived=money(req.body.waivedFee||0,'Waived fee',true);
+ const settings=await getSettings(session),returnedAt=new Date();
+ const late=lateFeeInfo(rental,lines,settings.graceMinutes,+returnedAt),waived=money(req.body.waivedFee||0,'Waived fee',true);
  if(waived>late.lateFee)throw httpErr(400,'Waiver exceeds the late fee');if(waived){assertPermission(req.user,'fees.waive');if(!req.body.waiverReason?.trim())throw httpErr(400,'Enter a fee waiver reason');}
- const lateFee=late.lateFee-waived,damageFee=money(req.body.damageFee||0,'Damage fee',true),balanceBefore=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
+ const lateFee=money(late.lateFee-waived,'Late fee',true),damageFee=money(req.body.damageFee||0,'Damage fee',true),balanceBefore=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
  const paid=req.body.paid||{};
  if(paid.balance&&req.body.balancePaymentAmount!==undefined){
   const amount=money(req.body.balancePaymentAmount,'Return payment');
   if(amount!==balanceBefore)throw httpErr(409,'The rental balance has changed. Reopen the return to see the latest amount.');
   if(!PAYMENT_METHODS.includes(req.body.method))throw httpErr(400,'Choose how the return payment was received');
  }
- const [ret]=await Return.create([{rental:rental._id,returnedAt:new Date(),lateFee,damageFee,partial:!complete,waivedFee:waived,waiverReason:req.body.waiverReason,notes:req.body.notes,checklist:req.body.checklist||[]}],{session});
+ if(paid.late&&req.body.latePaymentAmount!==undefined&&money(req.body.latePaymentAmount,'Late fee payment')!==lateFee)
+  throw httpErr(409,'The late fee has changed. Reopen the return to see the latest amount.');
+ const [ret]=await Return.create([{rental:rental._id,returnedAt,lateFee,damageFee,partial:!complete,waivedFee:waived,waiverReason:req.body.waiverReason,notes:req.body.notes,checklist:req.body.checklist||[]}],{session});
  for(const {line,ok,dmg,lost,n,unitRows} of rows){if(!n)continue;
   const equipment=await Equipment.findById(line.equipment._id).session(session);if(!equipment)throw httpErr(409,'Equipment is missing');await assertUnitTotals(equipment,session);
   await receiveUnits(line,unitRows,rental,session);
@@ -59,7 +59,7 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
   equipment.damagedQty+=dmg;equipment.totalQuantity-=lost;equipment.revision++;await equipment.save({session});
   for(const [type,qty,note] of [['returned',ok,''],['damaged',dmg,`${dmg} damaged`],['lost',lost,`${lost} lost`]])if(qty)await InventoryTransaction.create([{equipment:equipment._id,type,quantity:type==='returned'?qty:0,note,reference:String(ret._id)}],{session});
  }
- rental.latePeriodsCharged=late.totalLatePeriods;if(complete)rental.status='returned';await rental.save({session});
+ rental.lateFeePercentCharged=late.chargedPercent;if(complete)rental.status='returned';await rental.save({session});
  order.totalAmount=money(order.totalAmount+lateFee+damageFee,'Total',true);if(complete)order.status='completed';await order.save({session});
  if(req.body.returnNic===true){if(!complete)throw httpErr(409,'Return all equipment before releasing the NIC');await releaseNic(order,req.user,session);await order.save({session});}
  for(const [flag,amount,type,reference] of [['balance',balanceBefore,'balance','Return payment'],['late',lateFee,'fee','Late fee'],['damage',damageFee,'fee','Damage fee']])if(paid[flag]&&amount)payments.push(await recordPayment(order,{amount,type,method:req.body.method,reference},req.user,session));

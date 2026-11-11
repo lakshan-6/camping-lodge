@@ -10,6 +10,7 @@ import { sendPickupUpdate } from '../utils/bookingEmail.js';
 import {getSettings} from './settings.js';
 import {chooseSecurity,receiveNic,nicHeld} from '../utils/securityDeposit.js';
 import {allocateUnits,assertUnitTotals} from '../utils/equipmentUnits.js';
+import {lateFeeInfo} from '../utils/lateFees.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 r.get('/',wrap(async(req,res)=>{
  const f=req.query.status?{status:req.query.status}:{};const rows=await Rental.find(f).sort({dueDate:1}).populate('customer','name phone').populate('order','orderNo startDate endDate securityMethod nicHeldAt nicReturnedAt').lean();
@@ -93,10 +94,9 @@ r.post('/:id/extend',requirePermission('rentals.write'),wrap(async(req,res)=>{
  const avail=new Map((await availability(rental.dueDate,newDue,order._id,session)).map(i=>[String(i._id),i]));
  for(const i of lines)if(i.remaining>(avail.get(String(i.equipment._id))?.available||0))throw httpErr(409,'Extension overlaps another booking');
  const settings=await getSettings(session),rate=lines.reduce((s,i)=>s+i.remaining*i.periodRate,0);
- const latePeriods=Math.max(0,Math.ceil(Math.max(0,now-+rental.dueDate-(settings.graceMinutes||0)*60000)/PERIOD_MS)-(rental.latePeriodsCharged||0));
- const lateCharge=Math.round(rate*latePeriods*settings.lateFeePercent)/100;
- const extra=rate*periods+lateCharge,oldDue=rental.dueDate;
- rental.dueDate=newDue;rental.latePeriodsCharged=0;await rental.save({session});order.endDate=newDue;order.periods+=periods;order.extensionFees=(order.extensionFees||0)+extra;order.totalAmount+=extra;await order.save({session});
+ const {lateFee}=lateFeeInfo(rental,lines,settings.graceMinutes,now);
+ const extra=money(rate*periods+lateFee,'Extension charge',true),oldDue=rental.dueDate;
+ rental.dueDate=newDue;rental.latePeriodsCharged=0;rental.lateFeePercentCharged=0;await rental.save({session});order.endDate=newDue;order.periods+=periods;order.extensionFees=(order.extensionFees||0)+extra;order.totalAmount+=extra;await order.save({session});
  await syncInvoice(order,session);await audit(session,req.user,'rental.extended',order._id,{dueDate:oldDue},{dueDate:newDue,fee:extra});return {ok:true,dueDate:newDue,extra};
  }));
 }));
