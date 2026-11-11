@@ -7,6 +7,7 @@ import OrderWorkspace from '../components/OrderWorkspace.jsx';
 import {emailStatusMessage} from '../emailStatus.js';
 const fmt=d=>new Date(d).toLocaleString('en-LK',{timeZone:'Asia/Colombo',dateStyle:'medium',timeStyle:'short'});
 const hasEquipmentIssue=items=>items.some(item=>Number(item.quantityDamaged)>0||Number(item.quantityLost)>0);
+const amountDue=(amount,credit=0)=>Math.max(0,Math.round((amount-credit)*100)/100);
 export default function Returns({me}){
  const [out,setOut]=useState([]),[done,setDone]=useState([]),[form,setForm]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[workspace,setWorkspace]=useState(null);
  const load=()=>{api('/rentals?status=out').then(setOut).catch(e=>setError(e.message));api('/returns').then(setDone).catch(e=>setError(e.message));};useEffect(load,[]);
@@ -21,18 +22,24 @@ export default function Returns({me}){
  function setAccessory(index,changes){
   setForm({...form,checklist:form.checklist.map((entry,n)=>index===n?{...entry,...changes}:entry)});
  }
- const lateFeeDue=form?Math.max(0,Math.round((form.preview.lateFee-Number(form.waivedFee))*100)/100):0;
+ const canRecordPayment=can(me,'payments.record');
+ const lateFee=form?amountDue(form.preview.lateFee,Number(form.waivedFee)):0;
  const accessoryFee=form?form.checklist.reduce((cents,entry)=>entry.missing?cents+Math.round(Number(entry.fee)*100):cents,0)/100:0;
+ const damageFee=form?(Math.round(Number(form.damageFee)*100)+Math.round(accessoryFee*100))/100:0;
+ const paymentCredit=form?.preview.paymentCredit??0;
  const paymentOptions=form?[
   ['balance','Rental balance received',form.preview.balance],
-  ['late','Late fee received',lateFeeDue],
-  ['damage','Damage / loss charge received',(Math.round(Number(form.damageFee)*100)+Math.round(accessoryFee*100))/100]
+  ['late','Late fee received',amountDue(lateFee,paymentCredit)],
+  ['damage','Damage / loss charge received',amountDue(damageFee,amountDue(paymentCredit,lateFee))]
  ].filter(([, ,amount])=>amount>0):[];
+ const totalDue=amountDue(paymentOptions.reduce((sum,[,,amount])=>sum+amount,0));
+ const needsPaymentAccess=complete&&totalDue>0&&!canRecordPayment;
  async function save(e){
   e.preventDefault();if(busy)return;setBusy(true);setError('');
   try{
    const paid=Object.fromEntries(paymentOptions.map(([key])=>[key,form.paid[key]]));
-   const result=await api('/returns',{method:'POST',body:{...form,paid,balancePaymentAmount:paid.balance?form.preview.balance:undefined,latePaymentAmount:paid.late?lateFeeDue:undefined,items:form.items.map(i=>({...i,units:i.trackUnits?i.units.filter(u=>u.condition!=='out'):undefined})),returnNic:complete&&form.returnNic,rental:form.rental._id,damageFee:Number(form.damageFee),waivedFee:Number(form.waivedFee)}});
+   const confirmedAmounts=Object.fromEntries(paymentOptions.filter(([key])=>paid[key]).map(([key,,amount])=>[key+'PaymentAmount',amount]));
+   const result=await api('/returns',{method:'POST',body:{...form,paid,...confirmedAmounts,items:form.items.map(i=>({...i,units:i.trackUnits?i.units.filter(u=>u.condition!=='out'):undefined})),returnNic:complete&&form.returnNic,rental:form.rental._id,damageFee:Number(form.damageFee),waivedFee:Number(form.waivedFee)}});
    setForm(null);load();alert(`${result.emailNote} ${emailStatusMessage(result.notificationEmail)}`.trim());
   }catch(x){setError(x.message);}finally{setBusy(false);}
  }
@@ -85,13 +92,17 @@ export default function Returns({me}){
    </label>}
   </div>
  </details>
- {form.preview.nicHeld&&<section className="card security-card"><h3>Customer NIC is held</h3>{complete?<label className="check"><input type="checkbox" checked={form.returnNic} onChange={e=>setForm({...form,returnNic:e.target.checked})}/>I physically returned the NIC to the customer.</label>:<p>Keep the NIC until all outstanding equipment is received.</p>}<p className="hint">If the NIC stays with you, leave this unchecked. Record its return later from View order.</p></section>}
  <p>Late fee <strong>{lkr(form.preview.lateFee)}</strong>{form.preview.additionalPercent>0&&<> · {form.preview.additionalPercent}% of the outstanding item rates</>}</p>
  {can(me,'fees.waive')&&<><label>Late fee to waive (LKR)<input type="number" min="0" max={form.preview.lateFee} step="0.01" value={form.waivedFee} onChange={e=>setForm({...form,waivedFee:e.target.value})}/></label>{Number(form.waivedFee)>0&&<label>Waiver reason<input required value={form.waiverReason} onChange={e=>setForm({...form,waiverReason:e.target.value})}/></label>}</>}
  <section className="card">
-  <p className="rental-balance-due">Rental balance due <strong>{lkr(form.preview.balance)}</strong></p>
-  {can(me,'payments.record')&&paymentOptions.map(([key,label,amount])=><label className="check" key={key}><input type="checkbox" checked={form.paid[key]} onChange={e=>setForm({...form,paid:{...form.paid,[key]:e.target.checked}})}/>{label} · {lkr(amount)}</label>)}
-  {can(me,'payments.record')&&paymentOptions.some(([key])=>form.paid[key])&&<label>Payment method<select required value={form.method} onChange={e=>setForm({...form,method:e.target.value})}><option value="">Choose payment method</option><option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option><option value="other">Other</option></select></label>}
+  <p className="rental-balance-due">{complete?'Total due to complete the return':'Total due'} <strong>{lkr(totalDue)}</strong></p>
+  {complete&&totalDue>0&&<p className="hint">{needsPaymentAccess?'Ask a staff member with payment access to record the payment and complete this return.':'Confirm each amount received to settle the balance and complete the return.'}</p>}
+  {paymentCredit>0&&lateFee+damageFee>0&&<p className="hint">Prepaid credit applied to return fees · {lkr(Math.min(paymentCredit,amountDue(lateFee+damageFee)))}</p>}
+  {paymentOptions.map(([key,label,amount])=>canRecordPayment
+   ?<label className="check" key={key}><input type="checkbox" required={complete} checked={form.paid[key]} onChange={e=>setForm({...form,paid:{...form.paid,[key]:e.target.checked}})}/>{label} · {lkr(amount)}</label>
+   :<p key={key}>{label.replace(' received',' due')} · {lkr(amount)}</p>)}
+  {canRecordPayment&&paymentOptions.some(([key])=>form.paid[key])&&<label>Payment method<select required value={form.method} onChange={e=>setForm({...form,method:e.target.value})}><option value="">Choose payment method</option><option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option><option value="other">Other</option></select></label>}
  </section>
- <label>Notes<textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/></label>{error&&<p className="bad">{error}</p>}<div className="bar"><button type="button" disabled={busy} onClick={()=>setForm(null)}>Cancel</button><button className="btn" disabled={busy}>{busy?'Saving…':'Confirm return'}</button></div></form></div>}</>;
+ {form.preview.nicHeld&&<section className="card security-card"><h3>Customer NIC is held</h3>{complete?<label className="check"><input type="checkbox" required checked={form.returnNic} onChange={e=>setForm({...form,returnNic:e.target.checked})}/>I physically returned the NIC to the customer.</label>:<p>Keep the NIC until the final return is settled.</p>}</section>}
+ <label>Notes<textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/></label>{error&&<p className="bad">{error}</p>}<div className="bar"><button type="button" disabled={busy} onClick={()=>setForm(null)}>Cancel</button><button className="btn" disabled={busy||needsPaymentAccess}>{busy?'Saving…':'Confirm return'}</button></div></form></div>}</>;
 }

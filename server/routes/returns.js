@@ -42,7 +42,8 @@ r.get('/preview/:rental',wrap(async(req,res)=>{
  const order=await Order.findById(rental.order),lines=await remainingLines(order._id);
  const settings=await getSettings();
  const checklist=await outstandingChecklist(rental);
- res.json({...lateFeeInfo(rental,lines,settings),balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),items:lines,checklist,securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
+ const netPaid=await paidTotal(order._id);
+ res.json({...lateFeeInfo(rental,lines,settings),balance:rentalBalanceDue(order.totalAmount,netPaid),paymentCredit:rentalBalanceDue(netPaid,order.totalAmount),items:lines,checklist,securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
 }));
 r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  let orderId;
@@ -68,15 +69,32 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  const settings=await getSettings(session),returnedAt=new Date();
  const late=lateFeeInfo(rental,lines,settings,+returnedAt),waived=money(req.body.waivedFee||0,'Waived fee',true);
  if(waived>late.lateFee)throw httpErr(400,'Waiver exceeds the late fee');if(waived){assertPermission(req.user,'fees.waive');if(!req.body.waiverReason?.trim())throw httpErr(400,'Enter a fee waiver reason');}
- const lateFee=money(late.lateFee-waived,'Late fee',true),balanceBefore=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
+ const lateFee=money(late.lateFee-waived,'Late fee',true);
+ const totalAfter=money(order.totalAmount+lateFee+damageFee,'Total',true);
+ const netPaid=await paidTotal(order._id,session);
+ const credit=rentalBalanceDue(netPaid,order.totalAmount);
+ const amounts=[
+  ['balance',rentalBalanceDue(order.totalAmount,netPaid),'balance','Return payment'],
+  ['late',rentalBalanceDue(lateFee,credit),'fee','Late fee'],
+  ['damage',rentalBalanceDue(damageFee,rentalBalanceDue(credit,lateFee)),'fee','Damage fee'],
+ ];
  const paid=req.body.paid||{};
- if(paid.balance&&req.body.balancePaymentAmount!==undefined){
-  const amount=money(req.body.balancePaymentAmount,'Return payment');
-  if(amount!==balanceBefore)throw httpErr(409,'The rental balance has changed. Reopen the return to see the latest amount.');
-  if(!PAYMENT_METHODS.includes(req.body.method))throw httpErr(400,'Choose how the return payment was received');
+ for(const [flag,amount,,reference] of amounts){
+  const quoted=req.body[flag+'PaymentAmount'];
+  if(paid[flag]===true&&quoted!==undefined&&money(quoted,reference,true)!==amount)
+   throw httpErr(409,'The amount due has changed. Reopen the return to see the latest amounts.');
  }
- if(paid.late&&req.body.latePaymentAmount!==undefined&&money(req.body.latePaymentAmount,'Late fee payment')!==lateFee)
-  throw httpErr(409,'The late fee has changed. Reopen the return to see the latest amount.');
+ if(complete&&amounts.some(([flag,amount])=>amount>0&&paid[flag]!==true))
+  throw httpErr(409,'Record the full outstanding balance and any return fees before completing the return.');
+ const toRecord=amounts.filter(([flag,amount])=>amount>0&&paid[flag]===true);
+ if(toRecord.length){
+  assertPermission(req.user,'payments.record');
+  if(!PAYMENT_METHODS.includes(req.body.method))throw httpErr(400,'Choose how the return payment was received.');
+ }
+ const returnNic=req.body.returnNic===true;
+ if(returnNic&&!complete)throw httpErr(409,'Return all equipment before releasing the NIC');
+ if(complete&&nicHeld(order)&&!returnNic)
+  throw httpErr(409,'Confirm the customer’s NIC was physically returned before completing the return.');
  const [ret]=await Return.create([{rental:rental._id,returnedAt,lateFee,damageFee,partial:!complete,waivedFee:waived,waiverReason:req.body.waiverReason,notes:req.body.notes,checklist}],{session});
  for(const {line,ok,dmg,lost,n,unitRows} of rows){if(!n)continue;
   const equipment=await Equipment.findById(line.equipment._id).session(session);if(!equipment)throw httpErr(409,'Equipment is missing');await assertUnitTotals(equipment,session);
@@ -88,11 +106,13 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
   for(const [type,qty,note] of [['returned',ok,''],['damaged',dmg,`${dmg} damaged`],['lost',lost,`${lost} lost`]])if(qty)await InventoryTransaction.create([{equipment:equipment._id,type,quantity:type==='returned'?qty:0,note,reference:String(ret._id)}],{session});
  }
  rental.lateFeePercentCharged=late.chargedPercent;if(complete)rental.status='returned';await rental.save({session});
- order.totalAmount=money(order.totalAmount+lateFee+damageFee,'Total',true);if(complete)order.status='completed';await order.save({session});
- if(req.body.returnNic===true){if(!complete)throw httpErr(409,'Return all equipment before releasing the NIC');await releaseNic(order,req.user,session);await order.save({session});}
- for(const [flag,amount,type,reference] of [['balance',balanceBefore,'balance','Return payment'],['late',lateFee,'fee','Late fee'],['damage',damageFee,'fee','Damage fee']])if(paid[flag]&&amount)payments.push(await recordPayment(order,{amount,type,method:req.body.method,reference},req.user,session));
+ order.totalAmount=totalAfter;
+ for(const [,amount,type,reference] of toRecord)payments.push(await recordPayment(order,{amount,type,method:req.body.method,reference},req.user,session));
+ if(complete)order.status='completed';
+ if(returnNic)await releaseNic(order,req.user,session);
+ await order.save({session});
  await syncInvoice(order,session);await audit(session,req.user,complete?'rental.returned':'rental.partial_return',order._id,null,{return:ret._id,lateFee,damageFee,waived,items:rows.map(r=>({equipment:r.line.equipment._id,returned:r.ok,damaged:r.dmg,lost:r.lost}))});
- return {...ret.toObject(),emailNote:complete?'Return saved. Invoice and balance updated.':'Partial return saved. Remaining equipment is still out.'};
+ return {...ret.toObject(),emailNote:complete?'Return saved. Order completed and balance settled.':'Partial return saved. Remaining equipment is still out.'};
  });
  res.status(201).json({...result,notificationEmail:result._replayed?'already_processed':await sendReturnUpdate(orderId,result,payments)});
 }));

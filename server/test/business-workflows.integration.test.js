@@ -116,7 +116,12 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   const final={rental:rental._id,items:[{equipment:equipment._id,quantityReturned:1,quantityDamaged:1,quantityLost:0}],damageFee:250,checklist:[poles],requestId:crypto.randomUUID()};
   assert.equal((await request('/returns','POST',{...final,checklist:[]})).status,400);
   assert.equal((await request('/returns','POST',{...final,checklist:[poles,missing]})).status,409);
-  await ok('/returns','POST',final);assert.equal((await M.Rental.findById(rental._id)).status,'returned');assert.equal((await M.Equipment.findById(equipment._id)).damagedQty,1);assert.equal((await M.Order.findById(order._id)).totalAmount,6375.50);
+  const unpaid=await request('/returns','POST',final);
+  assert.equal(unpaid.status,409);assert.match(unpaid.data.error,/return fees/);
+  assert.equal((await M.Rental.findById(rental._id)).status,'out');
+  const settled={...final,paid:{damage:true},damagePaymentAmount:250,method:'cash'};
+  await ok('/returns','POST',settled);assert.equal((await M.Rental.findById(rental._id)).status,'returned');assert.equal((await M.Equipment.findById(equipment._id)).damagedQty,1);assert.equal((await M.Order.findById(order._id)).totalAmount,6375.50);
+  assert.equal((await M.Invoice.findOne({order:order._id})).status,'paid');
   assert.equal((await request('/returns','POST',{...final,requestId:crypto.randomUUID()})).status,409);
  });
  await t.test('repair completion is idempotent, releases stock and records its expense once',async()=>{
@@ -314,7 +319,7 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal((await ok(preview)).lateFee,0);
   await setHoursLate(rented._id,13);
   assert.equal((await ok(preview)).lateFee,900);
-  const final={rental:rented._id,items:first.items,returnNic:true,paid:{late:true},method:'cash',requestId:crypto.randomUUID()};
+  const final={rental:rented._id,items:first.items,returnNic:true,paid:{balance:true,late:true},balancePaymentAmount:(await ok(preview)).balance,method:'cash',requestId:crypto.randomUUID()};
   assert.equal((await request('/returns','POST',{...final,latePaymentAmount:500})).status,409);
   assert.equal((await ok('/returns','POST',{...final,latePaymentAmount:900})).lateFee,900);
   assert.equal((await M.Payment.findOne({order:booking._id,type:'fee'})).amount,900);
@@ -373,6 +378,13 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal((await ok('/returns/preview/'+collected._id)).balance,0);
   const atPickup=await M.Payment.findOne({order:prepaid._id,type:'balance'});
   assert.equal(atPickup.amount,0.20);assert.equal(atPickup.method,'bank_transfer');assert.equal(atPickup.reference,'Pickup payment');
+  await ok('/payments','POST',{order:prepaid._id,amount:0.10,type:'balance',method:'cash',allowOverpayment:true,reason:'Prepaid a return charge'});
+  assert.equal((await ok('/returns/preview/'+collected._id)).paymentCredit,0.10);
+  const final={rental:collected._id,items:[{equipment:gear._id,quantityDamaged:1}],returnNic:true,damageFee:0.25,paid:{damage:true},method:'cash'};
+  assert.equal((await request('/returns','POST',{...final,damagePaymentAmount:0.25})).status,409);
+  await ok('/returns','POST',{...final,damagePaymentAmount:0.15});
+  assert.equal((await M.Payment.findOne({order:prepaid._id,type:'fee'})).amount,0.15);
+  assert.equal((await M.Invoice.findOne({order:prepaid._id})).status,'paid');
  });
  await t.test('booking confirmation sends only after save, skips duplicates, and never rolls back an order',async mailTest=>{
   const gear=await ok('/equipment','POST',{name:'<Tent & Lamp>',category:'Lighting',totalQuantity:5,periodRate:800,deposit:500});

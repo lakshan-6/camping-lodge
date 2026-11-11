@@ -75,18 +75,33 @@ test('NIC custody and labelled equipment use real isolated transactions',{timeou
   assert.equal((await request(`/orders/${order._id}/security`,'POST',{action:'return',confirmed:true})).status,409);
   const line=await M.OrderItem.findOne({order:order._id});assert.equal(line.unitAssignments.length,3);assert.ok(line.unitAssignments.every(a=>a.outcome==='out'));
  });
- await t.test('partial and final returns identify exact damaged/lost units and preserve NIC until explicit release',async()=>{
+ await t.test('final return requires full payment and explicit NIC release while preserving unit outcomes',async()=>{
   const first=[{unit:units[1]._id,condition:'good'}];
   assert.equal((await request('/returns','POST',receipt(first,{returnNic:true}))).status,409);assert.equal(await M.Return.countDocuments(),0);assert.equal((await M.EquipmentUnit.findById(units[1]._id)).state,'out');
   assert.equal((await ok('/returns','POST',receipt(first))).partial,true);
   assert.equal((await request('/returns','POST',receipt(first))).status,400);
   assert.equal((await request('/returns','POST',receipt([{unit:units[2]._id,condition:'damaged'}],{items:[{equipment:eq._id,units:[{unit:units[2]._id,condition:'damaged'}],quantityReturned:1}]}))).status,400);
-  const last=[{unit:units[2]._id,condition:'damaged'},{unit:units[3]._id,condition:'lost'}];await ok('/returns','POST',receipt(last));
-  assert.equal((await M.Order.findById(order._id)).status,'completed');assert.ok((await M.Order.findById(order._id)).nicHeldAt);assert.equal((await M.Order.findById(order._id)).nicReturnedAt,undefined);
+  const last=[{unit:units[2]._id,condition:'damaged'},{unit:units[3]._id,condition:'lost'}];
+  const missingPayment=await request('/returns','POST',receipt(last,{returnNic:true}));
+  assert.equal(missingPayment.status,409);assert.match(missingPayment.data.error,/full outstanding balance/);
+  const balance=(await ok('/returns/preview/'+rental._id)).balance;
+  const final=receipt(last,{paid:{balance:true},balancePaymentAmount:balance,method:'cash'});
+  const missingNic=await request('/returns','POST',final);
+  assert.equal(missingNic.status,409);assert.match(missingNic.data.error,/NIC was physically returned/);
+  assert.equal((await M.Order.findById(order._id)).status,'active');
+  assert.equal((await M.Rental.findById(rental._id)).status,'out');
+  assert.equal(await M.Return.countDocuments({rental:rental._id}),1);
+  assert.equal(await M.Payment.countDocuments({order:order._id}),1);
+  const settled={...final,returnNic:true};
+  await ok('/returns','POST',settled);assert.equal((await ok('/returns','POST',settled))._replayed,true);
+  const completed=await M.Order.findById(order._id);
+  assert.equal(completed.status,'completed');assert.ok(completed.nicHeldAt);assert.ok(completed.nicReturnedAt);
+  assert.equal(await M.Payment.countDocuments({order:order._id}),2);
+  assert.equal((await M.Invoice.findOne({order:order._id})).status,'paid');
   const item=await M.Equipment.findById(eq._id);assert.equal(item.totalQuantity,6);assert.equal(item.damagedQty,2);assert.equal((await M.EquipmentUnit.findById(units[2]._id)).state,'damaged');assert.equal((await M.EquipmentUnit.findById(units[3]._id)).state,'lost');
   assert.equal(await M.EquipmentUnit.countDocuments({rental:rental._id}),0);assert.equal((await M.ReturnItem.findOne({units:{$elemMatch:{unit:units[2]._id}}})).units.length,2);
   const history=await ok(`/equipment/${eq._id}/units/${units[2]._id}/history`);assert.equal(history.history[0].assignment.outcome,'damaged');assert.equal(history.history[0].orderNo,order.orderNo);
-  await ok(`/orders/${order._id}/security`,'POST',{action:'return',confirmed:true});assert.ok((await M.Order.findById(order._id)).nicReturnedAt);
+  assert.equal(await M.AuditEvent.countDocuments({action:'security.nic_returned',target:order._id}),1);
  });
  await t.test('repairs and condition changes update exact labels and aggregate stock together',async()=>{
   assert.equal((await request('/equipment/repairs','POST',{equipment:eq._id,quantity:1})).status,400);
@@ -125,7 +140,7 @@ test('NIC custody and labelled equipment use real isolated transactions',{timeou
   const legacy=await ok('/equipment','POST',{name:'Bulk pot',category:'Cooking',totalQuantity:2,damagedQty:1,periodRate:100});
   const job=await ok('/equipment/repairs','POST',{equipment:legacy._id,quantity:1});assert.equal((await request('/equipment/'+legacy._id,'PUT',{...legacy,trackUnits:true,unitPrefix:'POT'})).status,409);
   await ok('/equipment/repairs/'+job._id+'/complete','POST',{cost:0});
-  const legacyOrder=await booking(1,'money',other._id,legacy._id),started=await ok('/rentals/start','POST',{order:legacyOrder._id,securityMethod:'money',securityDeposit:{received:true,amount:100},sendVia:'none',requestId:crypto.randomUUID()});assert.equal((await request('/equipment/'+legacy._id,'PUT',{...legacy,damagedQty:0,trackUnits:true,unitPrefix:'POT'})).status,409);await ok('/returns','POST',{rental:started._id,items:[{equipment:legacy._id,quantityReturned:1}],requestId:crypto.randomUUID()});
+  const legacyOrder=await booking(1,'money',other._id,legacy._id),started=await ok('/rentals/start','POST',{order:legacyOrder._id,securityMethod:'money',securityDeposit:{received:true,amount:100},payBalance:true,method:'cash',sendVia:'none',requestId:crypto.randomUUID()});assert.equal((await request('/equipment/'+legacy._id,'PUT',{...legacy,damagedQty:0,trackUnits:true,unitPrefix:'POT'})).status,409);await ok('/returns','POST',{rental:started._id,items:[{equipment:legacy._id,quantityReturned:1}],requestId:crypto.randomUUID()});
   const enabled=await ok('/equipment/'+legacy._id,'PUT',{...legacy,damagedQty:0,trackUnits:true,unitPrefix:'POT'});assert.equal(enabled.trackUnits,true);assert.equal((await ok('/equipment/'+legacy._id+'/units')).units.length,2);
  });
  await t.test('encrypted backup validation includes physical units and rejects broken allocations',async()=>{
