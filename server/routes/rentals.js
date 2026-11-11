@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { Order, OrderItem, Customer, Rental, Equipment, EquipmentUnit,InventoryTransaction, Invoice } from '../models/index.js';
 import { httpErr, availability, PERIOD_MS } from '../utils/availability.js';
-import { mutate, audit, units,money } from '../utils/operations.js';
+import { mutate, audit, units, money, PAYMENT_METHODS } from '../utils/operations.js';
 import { requirePermission, can } from '../utils/permissions.js';
-import { paidTotal, recordPayment, syncInvoice, remainingLines,depositHeld,recordSecurityDeposit } from '../utils/finance.js';
+import { paidTotal, rentalBalanceDue, recordPayment, syncInvoice, remainingLines,depositHeld,recordSecurityDeposit } from '../utils/finance.js';
 import { emailInvoice } from '../utils/invoiceMail.js';
 import { mailReady } from '../utils/mail.js';
 import { sendPickupUpdate } from '../utils/bookingEmail.js';
@@ -19,9 +19,10 @@ r.get('/pickup-preview/:order',requirePermission('rentals.write'),wrap(async(req
  const order=await Order.findById(req.params.order).lean();if(!order||order.deletedAt||order.status!=='reserved')throw httpErr(409,'Choose an uncollected booking');
  const lines=await remainingLines(order._id);
  const items=[];for(const line of lines)items.push({...line,availableUnits:line.equipment.trackUnits?await EquipmentUnit.find({equipment:line.equipment._id,state:'good'}).select('code state').sort({code:1}).lean():[]});
- const held=nicHeld(order),securityHeld=await depositHeld(order._id);
+ const held=nicHeld(order);
+ const [securityHeld,paid]=await Promise.all([depositHeld(order._id),paidTotal(order._id)]);
  const method=held?'nic':securityHeld>0?'money':order.securityMethod??null;
- res.json({securityMethod:method,nicHeld:held,securityHeld,depositAmount:order.depositAmount,items});
+ res.json({securityMethod:method,nicHeld:held,securityHeld,depositAmount:order.depositAmount,balance:rentalBalanceDue(order.totalAmount,paid),items});
 }));
 r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
  let payment, deposit;
@@ -54,7 +55,18 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
    }
    if(await depositHeld(order._id,session)<=0)throw httpErr(409,'Record the money security deposit before handover, or choose NIC security');
   }
-  if(req.body.payBalance){const amount=Math.max(0,order.totalAmount-await paidTotal(order._id,session));if(amount)payment=await recordPayment(order,{amount,type:'balance',method:req.body.method},req.user,session);}
+  const received=req.body.rentalPayment;
+  if(received!==undefined){
+   if(typeof received?.amount!=='number')throw httpErr(400,'Enter the rental payment received at pickup');
+   const amount=money(received.amount,'Pickup payment');
+   if(!PAYMENT_METHODS.includes(received.method))throw httpErr(400,'Choose how the pickup payment was received');
+   const balance=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
+   if(amount>balance)throw httpErr(409,'The pickup payment exceeds the current balance. Reopen the handover to see the latest balance.');
+   payment=await recordPayment(order,{amount,type:'balance',method:received.method,reference:'Pickup payment'},req.user,session);
+  }else if(req.body.payBalance){
+   const amount=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
+   if(amount)payment=await recordPayment(order,{amount,type:'balance',method:req.body.method},req.user,session);
+  }
   const [rental]=await Rental.create([{order:order._id,customer:order.customer,pickedUpAt:now,dueDate,pickupChecklist:required.map(label=>({label,checked:true}))}],{session});
   await allocateUnits(items,req.body.unitSelections,rental,session);
   order.startDate=now;order.endDate=dueDate;order.status='active';order.sendVia=['email','whatsapp','both','none'].includes(req.body.sendVia)?req.body.sendVia:'none';await order.save({session});

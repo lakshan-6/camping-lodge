@@ -2,9 +2,9 @@ import { Router } from 'express';
 import { Order, Rental, Return, ReturnItem, OrderItem, Equipment, InventoryTransaction } from '../models/index.js';
 import { PERIOD_MS,httpErr } from '../utils/availability.js';
 import { getSettings } from './settings.js';
-import { mutate,audit,money,units } from '../utils/operations.js';
+import { mutate,audit,money,units,PAYMENT_METHODS } from '../utils/operations.js';
 import { requirePermission,assertPermission } from '../utils/permissions.js';
-import { paidTotal,remainingLines,recordPayment,syncInvoice } from '../utils/finance.js';
+import { paidTotal,rentalBalanceDue,remainingLines,recordPayment,syncInvoice } from '../utils/finance.js';
 import {returnUnitRows,receiveUnits,assertUnitTotals} from '../utils/equipmentUnits.js';
 import {nicHeld,releaseNic} from '../utils/securityDeposit.js';
 import { sendReturnUpdate } from '../utils/bookingEmail.js';
@@ -18,7 +18,7 @@ r.get('/',wrap(async(req,res)=>res.json(await Return.find().sort({returnedAt:-1}
 r.get('/preview/:rental',wrap(async(req,res)=>{
  const rental=await Rental.findById(req.params.rental);if(!rental||rental.status==='returned')throw httpErr(404,'Rental not found');
  const order=await Order.findById(rental.order),lines=await remainingLines(order._id);
- res.json({...await lateInfo(rental,lines),balance:Math.max(0,order.totalAmount-await paidTotal(order._id)),items:lines,checklist:rental.pickupChecklist||[],securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
+ res.json({...await lateInfo(rental,lines),balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),items:lines,checklist:rental.pickupChecklist||[],securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
 }));
 r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  let orderId;
@@ -42,7 +42,13 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  if(complete&&required.some(label=>!confirmed.has(label)))throw httpErr(400,'Confirm all return checklist items');
  const late=await lateInfo(rental,lines,session),waived=money(req.body.waivedFee||0,'Waived fee',true);
  if(waived>late.lateFee)throw httpErr(400,'Waiver exceeds the late fee');if(waived){assertPermission(req.user,'fees.waive');if(!req.body.waiverReason?.trim())throw httpErr(400,'Enter a fee waiver reason');}
- const lateFee=late.lateFee-waived,damageFee=money(req.body.damageFee||0,'Damage fee',true),balanceBefore=Math.max(0,order.totalAmount-await paidTotal(order._id,session));
+ const lateFee=late.lateFee-waived,damageFee=money(req.body.damageFee||0,'Damage fee',true),balanceBefore=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
+ const paid=req.body.paid||{};
+ if(paid.balance&&req.body.balancePaymentAmount!==undefined){
+  const amount=money(req.body.balancePaymentAmount,'Return payment');
+  if(amount!==balanceBefore)throw httpErr(409,'The rental balance has changed. Reopen the return to see the latest amount.');
+  if(!PAYMENT_METHODS.includes(req.body.method))throw httpErr(400,'Choose how the return payment was received');
+ }
  const [ret]=await Return.create([{rental:rental._id,returnedAt:new Date(),lateFee,damageFee,partial:!complete,waivedFee:waived,waiverReason:req.body.waiverReason,notes:req.body.notes,checklist:req.body.checklist||[]}],{session});
  for(const {line,ok,dmg,lost,n,unitRows} of rows){if(!n)continue;
   const equipment=await Equipment.findById(line.equipment._id).session(session);if(!equipment)throw httpErr(409,'Equipment is missing');await assertUnitTotals(equipment,session);
@@ -56,8 +62,7 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  rental.latePeriodsCharged=late.totalLatePeriods;if(complete)rental.status='returned';await rental.save({session});
  order.totalAmount=money(order.totalAmount+lateFee+damageFee,'Total',true);if(complete)order.status='completed';await order.save({session});
  if(req.body.returnNic===true){if(!complete)throw httpErr(409,'Return all equipment before releasing the NIC');await releaseNic(order,req.user,session);await order.save({session});}
- const paid=req.body.paid||{};
- for(const [flag,amount,type,reference] of [['balance',balanceBefore,'balance','Rental balance'],['late',lateFee,'fee','Late fee'],['damage',damageFee,'fee','Damage fee']])if(paid[flag]&&amount)payments.push(await recordPayment(order,{amount,type,method:req.body.method,reference},req.user,session));
+ for(const [flag,amount,type,reference] of [['balance',balanceBefore,'balance','Return payment'],['late',lateFee,'fee','Late fee'],['damage',damageFee,'fee','Damage fee']])if(paid[flag]&&amount)payments.push(await recordPayment(order,{amount,type,method:req.body.method,reference},req.user,session));
  await syncInvoice(order,session);await audit(session,req.user,complete?'rental.returned':'rental.partial_return',order._id,null,{return:ret._id,lateFee,damageFee,waived,items:rows.map(r=>({equipment:r.line.equipment._id,returned:r.ok,damaged:r.dmg,lost:r.lost}))});
  return {...ret.toObject(),emailNote:complete?'Return saved. Invoice and balance updated.':'Partial return saved. Remaining equipment is still out.'};
  });

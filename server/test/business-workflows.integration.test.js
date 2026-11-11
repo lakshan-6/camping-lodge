@@ -235,6 +235,34 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   await ok('/rentals/start','POST',{...pickup,securityDeposit:{received:true,amount:0.20,method:'cash'}});
   assert.equal((await ok('/payments/deposits/'+booking._id)).held,1000.30);
  });
+ await t.test('pickup supports full payment and deferring the balance until return',async()=>{
+  const contact=await M.Customer.create({name:'Pay at handover',phone:'0776699011',nic:'200500112250'});
+  const gear=await ok('/equipment','POST',{name:'Payment test tent',category:'Camping',totalQuantity:1,periodRate:0.30});
+  const booking={customer:contact._id,...dates(),items:[{equipment:gear._id,quantity:1}],advance:{amount:0.10,method:'cash'}};
+  const deferred=await ok('/orders','POST',booking);
+  assert.equal((await ok('/rentals/pickup-preview/'+deferred._id)).balance,0.20);
+  const handover={securityMethod:'nic',nicReceived:true,sendVia:'none'};
+  const rented=await ok('/rentals/start','POST',{...handover,order:deferred._id});
+  assert.equal(await M.Payment.countDocuments({order:deferred._id}),1);
+  assert.equal((await ok('/returns/preview/'+rented._id)).balance,0.20);
+  const receipt={rental:rented._id,items:[{equipment:gear._id,quantityReturned:1}],paid:{balance:true},method:'card',returnNic:true,requestId:crypto.randomUUID()};
+  assert.equal((await request('/returns','POST',{...receipt,balancePaymentAmount:0.19})).status,409);
+  assert.equal(await M.Return.countDocuments({rental:rented._id}),0);
+  await ok('/returns','POST',{...receipt,balancePaymentAmount:0.20});
+  const atReturn=await M.Payment.findOne({order:deferred._id,type:'balance'});
+  assert.equal(atReturn.amount,0.20);assert.equal(atReturn.method,'card');assert.equal(atReturn.reference,'Return payment');
+  assert.equal((await M.Invoice.findOne({order:deferred._id})).status,'paid');
+
+  const prepaid=await ok('/orders','POST',booking);
+  const pickup={...handover,order:prepaid._id,requestId:crypto.randomUUID()};
+  assert.equal((await request('/rentals/start','POST',{...pickup,rentalPayment:{amount:0.20,method:''}})).status,400);
+  assert.equal((await request('/rentals/start','POST',{...pickup,rentalPayment:{amount:0.21,method:'cash'}})).status,409);
+  assert.equal((await M.Order.findById(prepaid._id)).status,'reserved');
+  const collected=await ok('/rentals/start','POST',{...pickup,rentalPayment:{amount:0.20,method:'bank_transfer'}});
+  assert.equal((await ok('/returns/preview/'+collected._id)).balance,0);
+  const atPickup=await M.Payment.findOne({order:prepaid._id,type:'balance'});
+  assert.equal(atPickup.amount,0.20);assert.equal(atPickup.method,'bank_transfer');assert.equal(atPickup.reference,'Pickup payment');
+ });
  await t.test('booking confirmation sends only after save, skips duplicates, and never rolls back an order',async mailTest=>{
   const gear=await ok('/equipment','POST',{name:'<Tent & Lamp>',category:'Lighting',totalQuantity:5,periodRate:800,deposit:500});
   const contact=await M.Customer.create({name:'Pat <Example>',phone:'0776969696',nic:'200500112233',email:'recipient@example.test',address:'Private customer address'});
@@ -295,11 +323,12 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal((await request('/rentals/start','POST',{order:booking._id})).status,400);
   assert.equal((await request('/rentals/start','POST',{order:booking._id,securityMethod:'money',securityDeposit:{received:false,amount:50}})).status,409);
   assert.equal((await ok('/rentals/pickup-preview/'+booking._id)).securityMethod,null);
-  const pickup={order:booking._id,payBalance:true,method:'cash',sendVia:'both',securityMethod:'money',securityDeposit:{received:true,amount:50,method:'cash'},requestId:crypto.randomUUID()};
+  const pickup={order:booking._id,rentalPayment:{amount:350,method:'cash'},sendVia:'both',securityMethod:'money',securityDeposit:{received:true,amount:50,method:'cash'},requestId:crypto.randomUUID()};
   const rented=await ok('/rentals/start','POST',pickup);
   assert.equal(rented.notificationEmail,'accepted');assert.equal(rented.whatsappInvoice,rented.invoiceId);
   assert.equal((await ok('/rentals/start','POST',pickup)).notificationEmail,'already_processed');
-  assert.match(requests.at(-1).textContent,/Rental balance payment: .*700/);
+  assert.match(requests.at(-1).textContent,/Rental balance payment: .*350.*Cash/);
+  assert.match(requests.at(-1).textContent,/Rental balance: .*350/);
   assert.match(requests.at(-1).textContent,/Security deposit received: .*50/);
   const collected=await ok('/orders/'+booking._id+'/detail');
   assert.equal(collected.securityMethod,'money');assert.equal(collected.securityHeld,50);assert.equal(collected.depositAmount,50);
@@ -310,9 +339,11 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal((await ok('/returns','POST',part)).notificationEmail,'already_processed');
   assert.match(requests.at(-1).subject,/partial return confirmation/);
   assert.match(requests.at(-1).textContent,/1 damaged/);assert.match(requests.at(-1).textContent,/Fee payment: .*50/);
-  const full=await ok('/returns','POST',{rental:rented._id,items:[{equipment:tent._id,quantityReturned:1}],requestId:crypto.randomUUID()});
+  assert.equal((await ok('/returns/preview/'+rented._id)).balance,350);
+  const full=await ok('/returns','POST',{rental:rented._id,items:[{equipment:tent._id,quantityReturned:1}],paid:{balance:true},balancePaymentAmount:350,method:'bank_transfer',requestId:crypto.randomUUID()});
   assert.equal(full.partial,false);assert.equal(full.notificationEmail,'accepted');
   assert.match(requests.at(-1).textContent,/Your equipment return is complete/);
+  assert.match(requests.at(-1).textContent,/Rental balance payment: .*350.*Bank transfer/);
   providerStatus=503;
   const security=await ok('/payments/deposits','POST',{order:booking._id,type:'refund',amount:50,method:'cash',reason:'Security returned',requestId:crypto.randomUUID()});
   assert.equal(security.notificationEmail,'failed');assert.ok(await M.DepositTransaction.findById(security._id));

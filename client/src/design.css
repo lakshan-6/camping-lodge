@@ -2249,6 +2249,7 @@ td[data-actions] {
 }
 /* Physical collateral and individually labelled equipment. */
 .security-card { border-left: 4px solid var(--pine, #184c3b); }
+.rental-balance-due strong { display: block; font-size: 1.5rem; color: var(--ink); }
 .security-card h3 { margin: 0; }
 .security-card small { display: block; margin-bottom: 12px; }
 .unit-picker { min-width: 0; margin: 20px 0; padding: 16px; border: 1px solid #dbe4df; border-radius: 14px; }

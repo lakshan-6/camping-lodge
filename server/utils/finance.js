@@ -8,6 +8,7 @@ export async function paidTotal(id, session = null) {
   const payments = await Payment.find({ order: id }).session(session);
   return Math.round(payments.reduce((s,p) => s + (p.type === 'refund' ? -p.amount : p.amount), 0)*100)/100;
 }
+export const rentalBalanceDue = (total, paid) => Math.max(0, Math.round((total-paid)*100)/100);
 export async function depositHeld(id, session = null) {
   const rows = await DepositTransaction.find({ order: id }).session(session);
   return Math.round(rows.reduce((s,p) => s + (p.type === 'collect' ? p.amount : -p.amount),0)*100)/100;
@@ -45,7 +46,7 @@ export async function recordPayment(order, body, user, session) {
     if (amount > paid) throw httpErr(409, 'Refund cannot exceed net rental payments received');
   } else {
     if (order.status === 'cancelled') throw httpErr(409, 'Cancelled bookings only accept refunds');
-    if (amount > Math.max(0, order.totalAmount-paid)) {
+    if (amount > rentalBalanceDue(order.totalAmount, paid)) {
       if (!body.allowOverpayment || !body.reason?.trim()) throw httpErr(409, 'Amount exceeds the balance. An admin must approve an overpayment with a reason.');
       assertPermission(user,'payments.refund');
     }
