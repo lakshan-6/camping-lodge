@@ -14,6 +14,9 @@ export function invoicePdf({ st, inv, items, paid }) {
     doc.on('data', c => chunks.push(c)); doc.on('end', () => resolve(Buffer.concat(chunks))); doc.on('error', reject);
     const balance = Math.max(0, inv.total - paid), done = inv.total - paid <= 0;
     const green = '#173a2f';
+    const planned = inv.order.pickupDate && ['reserved', 'cancelled'].includes(inv.order.status);
+    const pickup = planned ? inv.order.pickupDate : when(inv.order.startDate);
+    const returnTime = planned ? (inv.order.status === 'reserved' ? '36 hours after pickup' : 'Cancelled') : when(inv.order.endDate);
 
     if (fs.existsSync(logoPath)) doc.image(logoPath, 40, 36, { height: 80 });
     doc.fillColor(green).font('Helvetica-Bold').fontSize(18).text(st.businessName, 120, 42, { width: 250 });
@@ -24,7 +27,7 @@ export function invoicePdf({ st, inv, items, paid }) {
     doc.fillColor(green).font('Helvetica-Bold').fontSize(9).text('BILL TO', 40, 140).text('ORDER', 330, 140);
     doc.fillColor('#222').font('Helvetica').fontSize(10)
       .text([inv.customer.name, inv.customer.phone, inv.customer.nic ? 'NIC: ' + inv.customer.nic : ''].filter(Boolean).join('\n'), 40, 154, { width: 270 })
-      .text([inv.order.orderNo, 'Pickup: ' + when(inv.order.startDate), 'Return: ' + when(inv.order.endDate)].join('\n'), 330, 154, { width: 225 });
+      .text([inv.order.orderNo, 'Pickup: ' + pickup, 'Return: ' + returnTime].join('\n'), 330, 154, { width: 225 });
 
     doc.roundedRect(40, 212, 515, 28, 6).fill(done ? '#2d7a4f' : '#d9922b');
     doc.fillColor(done ? '#fff' : '#2a1b00').font('Helvetica-Bold').fontSize(11)

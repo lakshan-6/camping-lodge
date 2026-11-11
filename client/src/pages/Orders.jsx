@@ -8,8 +8,8 @@ import OrderWorkspace from '../components/OrderWorkspace.jsx';
 import { can } from '../permissions.js';
 import {PageIntro,EmptyState} from '../components/UI.jsx';
 import Icon from '../components/Icon.jsx';
+import { formatPickup, formatReturn } from '../businessTime.js';
 
-const fmt = d => new Date(d).toLocaleString('en-LK', { timeZone:'Asia/Colombo', dateStyle: 'medium', timeStyle: 'short' });
 const emailNotes = {
   accepted: 'The booking confirmation was sent for delivery.',
   no_email: 'No confirmation email was sent because this customer has no email address.',
@@ -85,7 +85,7 @@ export default function Orders({ me }) {
           <tbody>{orders.map(o => (
             <tr key={o._id}>
               <td data-l="Order"><b>{o.orderNo}</b></td><td data-l="Customer">{o.customer?.name}{o.customer?.detailsPending && <><br /><span className="tag fair">Details pending</span></>}</td>
-              <td data-l="Pickup">{fmt(o.startDate)}</td><td data-l="Return">{fmt(o.endDate)}</td>
+              <td data-l="Pickup">{formatPickup(o)}</td><td data-l="Return">{formatReturn(o)}</td>
               <td data-l="Items">{o.items.map(i => `${i.quantity}× ${i.equipment?.name}`).join(', ')}</td>
               <td data-l="Total">{lkr(o.totalAmount)}<small>{o.periods}× 36h</small></td>
               <td data-l="Status"><span className={'tag ' + (o.status === 'cancelled' ? 'needs_repair' : '')}>{o.status}</span></td>

@@ -2,30 +2,33 @@ import {businessISO,businessInput} from '../businessTime.js';
 import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
 
-const local = businessInput;
-const periodsOf = (s, e) => Math.max(1, Math.ceil((new Date(e) - new Date(s)) / (36 * 3600 * 1000)));
-
-// Change the items (and times) of an order before the customer picks it up
 export default function EditOrder({ order, onClose, onSaved }) {
-  const [start, setStart] = useState(local(order.startDate));
-  const [end, setEnd] = useState(local(order.endDate));
+  const dateOnly = !!order.pickupDate;
+  const [start, setStart] = useState(() => order.pickupDate || businessInput(order.startDate));
+  const [end, setEnd] = useState(() => dateOnly ? '' : businessInput(order.endDate));
   const [lines, setLines] = useState(order.items.map(i => ({ equipment: i.equipment._id, quantity: i.quantity })));
-  const [avail, setAvail] = useState([]);
+  const [availability, setAvailability] = useState(null);
   const [err, setErr] = useState('');
-  const ok = start && end && new Date(start) < new Date(end);
+  const ok = start && (dateOnly || (end && start < end));
+  const timing = ok ? (dateOnly ? { pickupDate: start } : { startDate: businessISO(start), endDate: businessISO(end) }) : null;
+  const query = timing ? new URLSearchParams(dateOnly ? { pickupDate: timing.pickupDate, exclude: order._id }
+    : { start: timing.startDate, end: timing.endDate, exclude: order._id }).toString() : '';
   useEffect(() => {
-    if (!ok) return;
-    const p = new URLSearchParams({ start: businessISO(start), end: businessISO(end), exclude: order._id });
-    api('/availability?' + p).then(d => setAvail(d.items)).catch(e => setErr(e.message));
-  }, [start, end]);
-  const periods = ok ? periodsOf(start, end) : 0;
+    if (!query) return;
+    let active = true;
+    api('/availability?' + query).then(d => { if (active) setAvailability({ query, ...d }); }).catch(e => { if (active) setErr(e.message); });
+    return () => { active = false; };
+  }, [query]);
+  const preview = availability?.query === query ? availability : null;
+  const avail = preview?.items || [];
+  const periods = preview?.periods || 0;
   const total = lines.reduce((s, l) => { const a = avail.find(x => x._id === l.equipment); return s + (a ? a.periodRate * l.quantity * periods : 0); }, 0);
   const setLine = (i, k, v) => setLines(lines.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
 
   async function save(e) {
-    e.preventDefault(); setErr('');
+    e.preventDefault(); if (!preview) return; setErr('');
     try {
-      await api('/orders/' + order._id, { method: 'PUT', body: { startDate: businessISO(start), endDate: businessISO(end),
+      await api('/orders/' + order._id, { method: 'PUT', body: { ...timing,
         items: lines.filter(l => l.equipment).map(l => ({ ...l, quantity: +l.quantity })) } });
       onSaved();
     } catch (x) { setErr(x.message); }
@@ -34,12 +37,12 @@ export default function EditOrder({ order, onClose, onSaved }) {
     <div className="modal" onClick={onClose}>
       <form style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()} onSubmit={save}>
         <h2>Change {order.orderNo}</h2>
-        <p className="hint">{order.customer?.name}. Change the items or times before the customer picks up.</p>
-        <div className="row">
+        <p className="hint">{order.customer?.name}</p>
+        {dateOnly ? <label>Pickup date<input required type="date" value={start} onChange={e => setStart(e.target.value)} /></label> : <div className="row">
           <label>Pickup (Sri Lanka time)<input required type="datetime-local" value={start} onChange={e => setStart(e.target.value)} /></label>
           <label>Return (Sri Lanka time)<input required type="datetime-local" value={end} onChange={e => setEnd(e.target.value)} /></label>
-        </div>
-        {ok && <p>{periods} rental period{periods > 1 ? 's' : ''} (36 hours each)</p>}
+        </div>}
+        {dateOnly ? <p>Equipment is due back 36 hours after pickup is confirmed.</p> : periods > 0 && <p>{periods} rental period{periods > 1 ? 's' : ''} (36 hours each)</p>}
         <div className="lines">
           {lines.map((l, i) => (
             <div className="line" key={i}>
@@ -53,7 +56,7 @@ export default function EditOrder({ order, onClose, onSaved }) {
           <p><b>New total: {lkr(total)}</b> <small>(was {lkr(order.totalAmount)})</small></p>
         </div>
         {err && <p className="bad">{err}</p>}
-        <div className="row end"><button type="button" onClick={onClose}>Cancel</button><button className="btn">Save changes</button></div>
+        <div className="row end"><button type="button" onClick={onClose}>Cancel</button><button className="btn" disabled={!preview}>Save changes</button></div>
       </form>
     </div>
   );

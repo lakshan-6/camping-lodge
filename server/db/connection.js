@@ -49,6 +49,10 @@ async function migrate(){
    if(testEngine)await testEngine.exec(ddl);else await session.client.query(ddl);
    await query('INSERT INTO schema_migrations(version) VALUES(1)',[],session);
   }
+  if(!(await query('SELECT version FROM schema_migrations WHERE version=2',[],session)).rows.length){
+   await query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS "pickupDate" text',[],session);
+   await query('INSERT INTO schema_migrations(version) VALUES(2)',[],session);
+  }
  });
 }
 export async function connectDatabase(url=process.env.DATABASE_URL){

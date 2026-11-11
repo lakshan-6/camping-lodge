@@ -42,6 +42,7 @@ export const Customer = model('Customer', new Schema({
 export const Order = model('Order', new Schema({
   orderNo: { type: String, unique: true },
   customer: ref('Customer', { required: true }),
+  pickupDate: String,
   startDate: { type: Date, required: true },
   endDate: { type: Date, required: true },
   status: { type: String, enum: ['reserved', 'active', 'completed', 'cancelled'], default: 'reserved' },

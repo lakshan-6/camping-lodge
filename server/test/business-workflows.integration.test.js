@@ -7,10 +7,12 @@ import * as M from '../models/index.js';
 import {requireAuth,sign,hashPassword} from '../utils/auth.js';
 import {initializeDocumentNumbers} from '../utils/documentNumbers.js';
 import {getSettings} from '../routes/settings.js';
+import {localDate} from '../utils/businessTime.js';
 import {testDatabase} from './helpers/database.js';
 import customerRoutes from '../routes/customers.js';
 import equipmentRoutes from '../routes/equipment.js';
 import orderRoutes from '../routes/orders.js';
+import availabilityRoutes from '../routes/availability.js';
 import rentalRoutes from '../routes/rentals.js';
 import returnRoutes from '../routes/returns.js';
 import paymentRoutes from '../routes/payments.js';
@@ -28,7 +30,7 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
  const staff=await M.User.create({name:'Staff',username:'staff',passwordHash,role:'staff',lastSeenAt:new Date()});
  let ownerToken=sign(owner),staffToken=sign(staff);
  const app=express();app.use(express.json({limit:'16mb'}));app.use(requireAuth);
- for(const [path,router]of Object.entries({customers:customerRoutes,equipment:equipmentRoutes,orders:orderRoutes,rentals:rentalRoutes,returns:returnRoutes,payments:paymentRoutes,reports,stats,manage,backups,users}))app.use('/'+path,router);
+ for(const [path,router]of Object.entries({customers:customerRoutes,equipment:equipmentRoutes,orders:orderRoutes,availability:availabilityRoutes,rentals:rentalRoutes,returns:returnRoutes,payments:paymentRoutes,reports,stats,manage,backups,users}))app.use('/'+path,router);
  app.use((e,req,res,next)=>res.status(e.status||(e.name==='ValidationError'?400:500)).json({error:e.message}));
  const server=app.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(r=>server.close(r)));const base=`http://127.0.0.1:${server.address().port}`;
  const request=async(path,method='GET',body,token=ownerToken)=>{const response=await fetch(base+path,{method,headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},...(body?{body:JSON.stringify(body)}:{})});const text=await response.text();let data;try{data=JSON.parse(text);}catch{data=text;}return {status:response.status,data};};
@@ -235,6 +237,33 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   await ok('/rentals/start','POST',{...pickup,securityDeposit:{received:true,amount:0.20,method:'cash'}});
   assert.equal((await ok('/payments/deposits/'+booking._id)).held,1000.30);
  });
+ await t.test('date-only bookings reserve stock for the pickup day and start a 36-hour rental at handover',async()=>{
+  const contact=await M.Customer.create({name:'Date-only pickup',phone:'0776699012',nic:'200500112251'});
+  const gear=await ok('/equipment','POST',{name:'Date-only tent',category:'Camping',totalQuantity:1,periodRate:300});
+  const body={customer:contact._id,pickupDate:'2031-11-05',items:[{equipment:gear._id,quantity:1}],advance};
+  assert.equal((await request('/orders','POST',{...body,pickupDate:'2031-02-29'})).status,400);
+  assert.equal((await ok('/availability?pickupDate=2031-11-05')).periods,1);
+  const booking=await ok('/orders','POST',body);
+  assert.equal(booking.startDate,'2031-11-04T18:30:00.000Z');
+  assert.equal(booking.endDate,'2031-11-07T06:30:00.000Z');
+  assert.equal(booking.periods,1);assert.equal(booking.totalAmount,300);
+  const available=async start=>{
+   const end=new Date(+new Date(start)+3600000).toISOString();
+   const result=await ok('/availability?'+new URLSearchParams({start,end}));
+   return result.items.find(item=>item._id===gear._id).available;
+  };
+  assert.equal(await available('2031-11-07T05:30:00Z'),0);
+  assert.equal(await available('2031-11-07T06:30:00Z'),1);
+  const today=localDate(new Date());
+  const edited=await ok('/orders/'+booking._id,'PUT',{pickupDate:today,items:body.items});
+  assert.equal(edited.pickupDate,today);assert.equal(edited.periods,1);assert.equal(edited.totalAmount,300);
+  const before=Date.now();
+  const rental=await ok('/rentals/start','POST',{order:booking._id,securityMethod:'nic',nicReceived:true,sendVia:'none'});
+  assert.ok(+new Date(rental.pickedUpAt)>=before);
+  assert.equal(new Date(rental.dueDate)-new Date(rental.pickedUpAt),36*3600000);
+  const active=await ok('/orders/'+booking._id+'/detail');
+  assert.equal(active.startDate,rental.pickedUpAt);assert.equal(active.endDate,rental.dueDate);
+ });
  await t.test('pickup supports full payment and deferring the balance until return',async()=>{
   const contact=await M.Customer.create({name:'Pay at handover',phone:'0776699011',nic:'200500112250'});
   const gear=await ok('/equipment','POST',{name:'Payment test tent',category:'Camping',totalQuantity:1,periodRate:0.30});
@@ -306,8 +335,10 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
 
   process.env.BREVO_API_KEY='test-booking-key';providerStatus=201;requests.length=0;
   const tent=await ok('/equipment','POST',{name:'Lifecycle tent',category:'Camping',totalQuantity:2,periodRate:400,deposit:50});
-  const booking=await ok('/orders','POST',{customer:contact._id,...dates(),items:[{equipment:tent._id,quantity:2}],advance:{amount:25,method:'cash'},requestId:crypto.randomUUID()});
+  const booking=await ok('/orders','POST',{customer:contact._id,pickupDate:localDate(new Date()),items:[{equipment:tent._id,quantity:2}],advance:{amount:25,method:'cash'},requestId:crypto.randomUUID()});
   assert.match(requests[0].textContent,/Bring your NIC or a refundable money deposit. Choose at pickup/);
+  assert.match(requests[0].textContent,/Pickup date \(Sri Lanka\):/);
+  assert.match(requests[0].textContent,/Return deadline: 36 hours after pickup/);
   const preview=await ok('/rentals/pickup-preview/'+booking._id);
   assert.equal(preview.securityMethod,null);assert.equal(preview.securityHeld,0);assert.equal(preview.depositAmount,100);
   assert.equal((await request('/orders/'+booking._id+'/security','POST',{action:'set',method:'money'})).status,409);

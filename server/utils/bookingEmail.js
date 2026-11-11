@@ -8,6 +8,7 @@ const isMailbox = value => value.length <= 254 && /^[^\s@<>,;"\\]+@[^\s@<>,;"\\]
 const oneLine = value => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
 const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const formatDate = new Intl.DateTimeFormat('en-LK', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Colombo' });
+const formatPickupDate = new Intl.DateTimeFormat('en-LK', { dateStyle: 'medium', timeZone: 'Asia/Colombo' });
 const formatAmount = new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR' });
 const money = amount => formatAmount.format(Number(amount) || 0);
 const date = value => formatDate.format(new Date(value));
@@ -76,7 +77,9 @@ export function sendBookingConfirmation(orderId) {
     if (order.status !== 'reserved') return null;
     const [items, paid] = await Promise.all([orderItems(order), paidTotal(orderId)]);
     return { title: 'Booking confirmation', tag: 'booking-confirmation', intro: 'Your rental booking is confirmed. Here are your order details.', details: [
-      ['Pickup (Sri Lanka time)', date(order.startDate)], ['Return (Sri Lanka time)', date(order.endDate)],
+      ...(order.pickupDate
+        ? [['Pickup date (Sri Lanka)', formatPickupDate.format(new Date(order.startDate))], ['Return deadline', '36 hours after pickup']]
+        : [['Pickup (Sri Lanka time)', date(order.startDate)], ['Return (Sri Lanka time)', date(order.endDate)]]),
       ['Rental total', money(order.totalAmount)], ['Rental payment recorded', money(paid)], rentalBalance(order, paid),
       ['Security at pickup', order.securityMethod === 'nic' ? 'Bring your NIC' :
         order.securityMethod === 'money' ? `Refundable money deposit: ${money(order.depositAmount)}` : 'Bring your NIC or a refundable money deposit. Choose at pickup.'],

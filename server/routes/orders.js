@@ -55,7 +55,7 @@ r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
     }
     const p=await priceItems(req.body,session);
     if(advanceAmount>p.total)throw httpErr(409,'Rental advance cannot exceed the rental total');
-    const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:customer._id,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:depositAmount??p.deposit,securityMethod:method,notes:req.body.notes}],{session});
+    const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:customer._id,pickupDate:p.pickupDate,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:depositAmount??p.deposit,securityMethod:method,notes:req.body.notes}],{session});
     await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
     await recordPayment(order,{type:'deposit',amount:advanceAmount,method:advance.method,reference:advance.reference,reason:advance.reason},req.user,session);
     await audit(session,req.user,'order.created',order._id,null,order);return order;
@@ -68,10 +68,12 @@ r.put('/:id',requirePermission('orders.write'),wrap(async(req,res)=>{
     const order=await Order.findById(req.params.id).session(session);
     if(!order||order.deletedAt)throw httpErr(404,'Order not found');
     if(order.status!=='reserved')throw httpErr(409,'Only uncollected bookings can be edited');
-    const before=order.toObject();const p=await priceItems({startDate:req.body.startDate||order.startDate,endDate:req.body.endDate||order.endDate,items:req.body.items},session,order._id);
+    const before=order.toObject();
+    const pickupDate=req.body.pickupDate===undefined?order.pickupDate:req.body.pickupDate;
+    const p=await priceItems({pickupDate,startDate:req.body.startDate||order.startDate,endDate:req.body.endDate||order.endDate,items:req.body.items},session,order._id);
     await OrderItem.deleteMany({order:order._id},{session});await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
     const depositAmount=order.securityMethod==='money'?order.depositAmount??p.deposit:p.deposit;
-    order.set({startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount});await order.save({session});
+    order.set({pickupDate:p.pickupDate,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount});await order.save({session});
     await syncInvoice(order,session);await audit(session,req.user,'order.edited',order._id,before,order);return order;
   }));
 }));

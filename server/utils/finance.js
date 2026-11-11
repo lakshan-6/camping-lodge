@@ -1,6 +1,6 @@
 import { Order, OrderItem, Payment, Invoice, DepositTransaction, Equipment, Rental } from '../models/index.js';
 import { money, methodOf, units, audit } from './operations.js';
-import { httpErr, availability, countPeriods } from './availability.js';
+import { httpErr, availability, bookingWindow } from './availability.js';
 import { nextDocumentNumber } from './documentNumbers.js';
 import { assertPermission } from './permissions.js';
 
@@ -57,8 +57,8 @@ export async function recordPayment(order, body, user, session) {
   return payment;
 }
 export async function priceItems(body, session, exclude) {
-  const start = new Date(body.startDate), end = new Date(body.endDate);
-  if (!Number.isFinite(+start) || !Number.isFinite(+end) || start >= end) throw httpErr(400,'End time must be after pickup');
+  const window = bookingWindow(body.pickupDate,body.startDate,body.endDate);
+  const { start,end,periods } = window;
   if (!Array.isArray(body.items) || !body.items.length || body.items.length>100) throw httpErr(400,'Choose at least one item');
   const wanted = new Map();
   for (const i of body.items) {
@@ -67,7 +67,7 @@ export async function priceItems(body, session, exclude) {
   }
   await Equipment.updateMany({ _id: { $in: [...wanted.keys()] } }, { $inc: { revision: 1 } }, {session});
   const avail = new Map((await availability(start,end,exclude,session)).map(i=>[String(i._id),i]));
-  const periods = countPeriods(start,end); let total=0,deposit=0;
+  let total=0,deposit=0;
   const lines = [...wanted].map(([id,quantity])=>{
     const item=avail.get(id);
     if (!item || quantity>item.available) throw httpErr(409,`${item?.name || 'Equipment'} is not available in the requested quantity`);
@@ -75,7 +75,7 @@ export async function priceItems(body, session, exclude) {
     total+=lineTotal;deposit+=quantity*item.deposit;
     return { equipment:id,quantity,periodRate:item.periodRate,periods,lineTotal,returnedQuantity:0 };
   });
-  return { start,end,periods,lines,total:money(total,'Total',true),deposit:money(deposit,'Deposit',true) };
+  return { ...window,lines,total:money(total,'Total',true),deposit:money(deposit,'Deposit',true) };
 }
 export async function remainingLines(order, session = null) {
   return (await OrderItem.find({order}).populate('equipment','name checklist trackUnits').session(session)).map(i=>({
