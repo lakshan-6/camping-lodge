@@ -63,7 +63,7 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
  await t.test('inventory only accepts whole consistent quantities and staff cannot change it',async()=>{
   assert.equal((await request('/equipment','POST',{name:'Bad',category:'Tents',totalQuantity:1.5,periodRate:2000})).status,400);
   assert.equal((await request('/equipment','POST',{name:'Bad',category:'Tents',totalQuantity:1,damagedQty:2,periodRate:2000})).status,400);
-  equipment=await ok('/equipment','POST',{name:'Tent',category:'Tents',totalQuantity:5,damagedQty:0,periodRate:2000,deposit:1000,checklist:['Poles','Bag']});
+  equipment=await ok('/equipment','POST',{name:'Tent',category:'Tents',totalQuantity:5,damagedQty:0,periodRate:2000,deposit:1000,checklist:['Poles','Bag','Mat']});
   assert.equal((await request('/equipment','PUT',{},staffToken)).status,404);
   assert.equal((await request('/equipment/'+equipment._id,'PUT',{...equipment,totalQuantity:6},staffToken)).status,403);
  });
@@ -79,11 +79,13 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal(await M.Order.countDocuments(),1);assert.equal(await M.Payment.countDocuments(),1);
   assert.equal((await request('/orders','POST',{...body,items:[{equipment:equipment._id,quantity:1.5}],requestId:crypto.randomUUID()})).status,400);
  });
- await t.test('pickup requires checklist, duplicate/concurrent pickup creates one rental and payment',async()=>{
+ await t.test('pickup saves only selected accessories and concurrent pickup creates one rental and payment',async()=>{
   const body={order:order._id,payBalance:true,method:'cash',sendVia:'none',securityMethod:'money',securityDeposit:{received:true,amount:1000,method:'cash'},requestId:crypto.randomUUID()};
-  assert.equal((await request('/rentals/start','POST',body)).status,400);
-  body.checklist=['Tent: Poles','Tent: Bag'].map(label=>({label,checked:true}));
+  const preview=await ok('/rentals/pickup-preview/'+order._id);
+  assert.deepEqual(preview.checklist.map(item=>item.label),['Tent: Poles','Tent: Bag','Tent: Mat']);
+  body.checklist=preview.checklist.map(item=>({...item,checked:item.label!=='Tent: Mat'}));
   const results=await Promise.all([request('/rentals/start','POST',body),request('/rentals/start','POST',body)]);assert.deepEqual(results.map(x=>x.status),[201,201]);rental=results[0].data;
+  assert.deepEqual(rental.pickupChecklist.map(item=>item.label),['Tent: Poles','Tent: Bag']);
   assert.equal(await M.Rental.countDocuments({order:order._id}),1);assert.equal(await M.Payment.countDocuments({order:order._id}),2);
   assert.equal((await request('/rentals/start','POST',{...body,requestId:crypto.randomUUID()})).status,409);
  });
@@ -96,13 +98,25 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   const held=await ok('/payments/deposits/'+order._id);assert.equal(held.held,2500);
   assert.equal((await request('/payments','POST',{order:order._id,amount:1,type:'refund',reason:'test'},staffToken)).status,403);
  });
- await t.test('partial returns release only received items; damage/loss and fees are not double-recorded',async()=>{
-  const body={rental:rental._id,items:[{equipment:equipment._id,quantityReturned:1,quantityDamaged:0,quantityLost:0}],damageFee:0,requestId:crypto.randomUUID()};
+ await t.test('partial returns charge missing accessories once and final returns resolve only outstanding accessories',async()=>{
+  const preview='/returns/preview/'+rental._id;
+  const [poles,bag]= (await ok(preview)).checklist;
+  assert.deepEqual([poles.label,bag.label],['Tent: Poles','Tent: Bag']);
+  const missing={...bag,checked:false,missing:true,fee:125.50};
+  const body={rental:rental._id,items:[{equipment:equipment._id,quantityReturned:1,quantityDamaged:0,quantityLost:0}],checklist:[missing],paid:{damage:true},method:'cash',requestId:crypto.randomUUID()};
+  assert.equal((await request('/returns','POST',{...body,checklist:[{...missing,label:'Tent: Mat'}]})).status,409);
+  assert.equal((await request('/returns','POST',{...body,checklist:[{...missing,fee:-1}]})).status,400);
   const result=await ok('/returns','POST',body);assert.equal(result.partial,true);await ok('/returns','POST',body);assert.equal(await M.Return.countDocuments(),1);
+  assert.equal(result.damageFee,125.50);assert.equal(result.checklist[0].fee,125.50);
+  const fees=await M.Payment.find({order:order._id,type:'fee'});
+  assert.deepEqual(fees.map(payment=>payment.amount),[125.50]);
+  assert.deepEqual((await ok(preview)).checklist.map(item=>item.label),['Tent: Poles']);
   let lines=await M.OrderItem.find({order:order._id});assert.equal(lines[0].returnedQuantity,1);assert.equal((await M.Rental.findById(rental._id)).status,'out');
   const stock=await import('../utils/availability.js');const avail=await stock.availability(new Date(),new Date(Date.now()+1000));assert.equal(avail.find(i=>String(i._id)===equipment._id).available,3);
-  const final={rental:rental._id,items:[{equipment:equipment._id,quantityReturned:1,quantityDamaged:1,quantityLost:0}],damageFee:250,checklist:['Tent: Poles','Tent: Bag'].map(label=>({label,checked:true})),requestId:crypto.randomUUID()};
-  await ok('/returns','POST',final);assert.equal((await M.Rental.findById(rental._id)).status,'returned');assert.equal((await M.Equipment.findById(equipment._id)).damagedQty,1);assert.equal((await M.Order.findById(order._id)).totalAmount,6250);
+  const final={rental:rental._id,items:[{equipment:equipment._id,quantityReturned:1,quantityDamaged:1,quantityLost:0}],damageFee:250,checklist:[poles],requestId:crypto.randomUUID()};
+  assert.equal((await request('/returns','POST',{...final,checklist:[]})).status,400);
+  assert.equal((await request('/returns','POST',{...final,checklist:[poles,missing]})).status,409);
+  await ok('/returns','POST',final);assert.equal((await M.Rental.findById(rental._id)).status,'returned');assert.equal((await M.Equipment.findById(equipment._id)).damagedQty,1);assert.equal((await M.Order.findById(order._id)).totalAmount,6375.50);
   assert.equal((await request('/returns','POST',{...final,requestId:crypto.randomUUID()})).status,409);
  });
  await t.test('repair completion is idempotent, releases stock and records its expense once',async()=>{
@@ -331,14 +345,15 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal((await ok('/rentals/'+another._id+'/extend','POST',{periods:1})).extra,1300);
   await ok('/settings','PUT',original);
  });
- await t.test('pickup supports full payment and deferring the balance until return',async()=>{
+ await t.test('pickup supports full payment and deferring the balance with a zero payment and empty checklist',async()=>{
   const contact=await M.Customer.create({name:'Pay at handover',phone:'0776699011',nic:'200500112250'});
-  const gear=await ok('/equipment','POST',{name:'Payment test tent',category:'Camping',totalQuantity:1,periodRate:0.30});
+  const gear=await ok('/equipment','POST',{name:'Payment test tent',category:'Camping',totalQuantity:1,periodRate:0.30,checklist:['Bag']});
   const booking={customer:contact._id,...dates(),items:[{equipment:gear._id,quantity:1}],advance:{amount:0.10,method:'cash'}};
   const deferred=await ok('/orders','POST',booking);
   assert.equal((await ok('/rentals/pickup-preview/'+deferred._id)).balance,0.20);
   const handover={securityMethod:'nic',nicReceived:true,sendVia:'none'};
-  const rented=await ok('/rentals/start','POST',{...handover,order:deferred._id});
+  const rented=await ok('/rentals/start','POST',{...handover,order:deferred._id,rentalPayment:{amount:0}});
+  assert.deepEqual(rented.pickupChecklist,[]);
   assert.equal(await M.Payment.countDocuments({order:deferred._id}),1);
   assert.equal((await ok('/returns/preview/'+rented._id)).balance,0.20);
   const receipt={rental:rented._id,items:[{equipment:gear._id,quantityReturned:1}],paid:{balance:true},method:'card',returnNic:true,requestId:crypto.randomUUID()};

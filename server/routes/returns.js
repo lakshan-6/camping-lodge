@@ -10,12 +10,39 @@ import {nicHeld,releaseNic} from '../utils/securityDeposit.js';
 import { sendReturnUpdate } from '../utils/bookingEmail.js';
 import { lateFeeInfo } from '../utils/lateFees.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
+const checklistId=entry=>entry.key??entry.label;
+async function outstandingChecklist(rental,session){
+ const handedOut=(rental.pickupChecklist||[]).filter(entry=>entry.checked===true);
+ if(!handedOut.length)return [];
+ const previousReturns=await Return.find({rental:rental._id}).select('checklist').session(session).lean();
+ const resolved=new Set(previousReturns.flatMap(record=>(record.checklist||[])
+  .filter(entry=>entry.checked===true||entry.missing===true).map(checklistId)));
+ return handedOut.filter(entry=>!resolved.has(checklistId(entry)));
+}
+function receiveChecklist(outstanding,submitted,complete){
+ if(!Array.isArray(submitted))throw httpErr(400,'Choose accessories from the return checklist');
+ const checklist=new Map();
+ for(const entry of submitted){
+  const checked=entry?.checked===true,missing=entry?.missing===true;
+  if(!checked&&!missing)continue;
+  const item=outstanding.find(i=>i.label===entry.label&&(!entry.key||i.key===entry.key));
+  if(!item)throw httpErr(409,'The return checklist has changed. Reopen it to see the remaining accessories.');
+  const id=checklistId(item);
+  if(checked&&missing||checklist.has(id))throw httpErr(400,'Choose one outcome for each accessory');
+  const fee=missing?money(entry.fee??0,'Missing accessory fee',true):0;
+  checklist.set(id,{...item,checked,missing,fee});
+ }
+ if(complete&&outstanding.some(item=>!checklist.has(checklistId(item))))
+  throw httpErr(400,'Mark each handed-out accessory as returned or missing before completing the return');
+ return [...checklist.values()];
+}
 r.get('/',wrap(async(req,res)=>res.json(await Return.find().sort({returnedAt:-1}).limit(200).populate({path:'rental',populate:[{path:'customer',select:'name'},{path:'order',select:'orderNo status securityMethod nicHeldAt nicReturnedAt'}]}).lean())));
 r.get('/preview/:rental',wrap(async(req,res)=>{
  const rental=await Rental.findById(req.params.rental);if(!rental||rental.status==='returned')throw httpErr(404,'Rental not found');
  const order=await Order.findById(rental.order),lines=await remainingLines(order._id);
  const settings=await getSettings();
- res.json({...lateFeeInfo(rental,lines,settings),balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),items:lines,checklist:rental.pickupChecklist||[],securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
+ const checklist=await outstandingChecklist(rental);
+ res.json({...lateFeeInfo(rental,lines,settings),balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),items:lines,checklist,securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
 }));
 r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  let orderId;
@@ -35,12 +62,13 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  });
  if(!rows.some(r=>r.n>0))throw httpErr(400,'Return at least one item');
  const complete=rows.every(r=>r.n===r.line.remaining);
- const required=(rental.pickupChecklist||[]).map(i=>i.label),confirmed=new Set((req.body.checklist||[]).filter(i=>i.checked).map(i=>i.label));
- if(complete&&required.some(label=>!confirmed.has(label)))throw httpErr(400,'Confirm all return checklist items');
+ const checklist=receiveChecklist(await outstandingChecklist(rental,session),req.body.checklist??[],complete);
+ const equipmentFee=money(req.body.damageFee??0,'Equipment damage / loss fee',true);
+ const damageFee=money((Math.round(equipmentFee*100)+checklist.reduce((cents,entry)=>cents+Math.round(entry.fee*100),0))/100,'Damage / loss fee',true);
  const settings=await getSettings(session),returnedAt=new Date();
  const late=lateFeeInfo(rental,lines,settings,+returnedAt),waived=money(req.body.waivedFee||0,'Waived fee',true);
  if(waived>late.lateFee)throw httpErr(400,'Waiver exceeds the late fee');if(waived){assertPermission(req.user,'fees.waive');if(!req.body.waiverReason?.trim())throw httpErr(400,'Enter a fee waiver reason');}
- const lateFee=money(late.lateFee-waived,'Late fee',true),damageFee=money(req.body.damageFee||0,'Damage fee',true),balanceBefore=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
+ const lateFee=money(late.lateFee-waived,'Late fee',true),balanceBefore=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
  const paid=req.body.paid||{};
  if(paid.balance&&req.body.balancePaymentAmount!==undefined){
   const amount=money(req.body.balancePaymentAmount,'Return payment');
@@ -49,7 +77,7 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  }
  if(paid.late&&req.body.latePaymentAmount!==undefined&&money(req.body.latePaymentAmount,'Late fee payment')!==lateFee)
   throw httpErr(409,'The late fee has changed. Reopen the return to see the latest amount.');
- const [ret]=await Return.create([{rental:rental._id,returnedAt,lateFee,damageFee,partial:!complete,waivedFee:waived,waiverReason:req.body.waiverReason,notes:req.body.notes,checklist:req.body.checklist||[]}],{session});
+ const [ret]=await Return.create([{rental:rental._id,returnedAt,lateFee,damageFee,partial:!complete,waivedFee:waived,waiverReason:req.body.waiverReason,notes:req.body.notes,checklist}],{session});
  for(const {line,ok,dmg,lost,n,unitRows} of rows){if(!n)continue;
   const equipment=await Equipment.findById(line.equipment._id).session(session);if(!equipment)throw httpErr(409,'Equipment is missing');await assertUnitTotals(equipment,session);
   await receiveUnits(line,unitRows,rental,session);

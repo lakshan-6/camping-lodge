@@ -12,6 +12,9 @@ import {chooseSecurity,receiveNic,nicHeld} from '../utils/securityDeposit.js';
 import {allocateUnits,assertUnitTotals} from '../utils/equipmentUnits.js';
 import {lateFeeInfo} from '../utils/lateFees.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
+const handoverChecklist=items=>items.flatMap(item=>(item.equipment.checklist||[]).map((part,index)=>({
+ key:`${item._id}:${index}`,label:`${item.equipment.name}: ${part}`,checked:false,
+})));
 r.get('/',wrap(async(req,res)=>{
  const f=req.query.status?{status:req.query.status}:{};const rows=await Rental.find(f).sort({dueDate:1}).populate('customer','name phone').populate('order','orderNo startDate endDate securityMethod nicHeldAt nicReturnedAt').lean();
  const result=[];for(const row of rows)result.push({...row,overdue:row.status==='out'&&new Date(row.dueDate)<new Date(),items:await remainingLines(row.order._id)});res.json(result);
@@ -23,7 +26,7 @@ r.get('/pickup-preview/:order',requirePermission('rentals.write'),wrap(async(req
  const held=nicHeld(order);
  const [securityHeld,paid]=await Promise.all([depositHeld(order._id),paidTotal(order._id)]);
  const method=held?'nic':securityHeld>0?'money':order.securityMethod??null;
- res.json({securityMethod:method,nicHeld:held,securityHeld,depositAmount:order.depositAmount,balance:rentalBalanceDue(order.totalAmount,paid),items});
+ res.json({securityMethod:method,nicHeld:held,securityHeld,depositAmount:order.depositAmount,balance:rentalBalanceDue(order.totalAmount,paid),items,checklist:handoverChecklist(items)});
 }));
 r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
  let payment, deposit;
@@ -38,9 +41,15 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
   const avail=new Map((await availability(now,dueDate,order._id,session)).map(i=>[String(i._id),i]));
   for(const i of items)if(!avail.has(String(i.equipment._id))||i.quantity>avail.get(String(i.equipment._id)).available)throw httpErr(409,'Actual pickup time conflicts with another booking. Change the booking or choose different items.');
   for(const i of items)await assertUnitTotals(i.equipment,session);
-  const required=items.flatMap(i=>(i.equipment.checklist||[]).map(part=>`${i.equipment.name}: ${part}`));
-  const confirmed=new Set((req.body.checklist||[]).filter(i=>i.checked).map(i=>i.label));
-  if(required.some(label=>!confirmed.has(label)))throw httpErr(400,'Confirm all equipment handover checklist items');
+  const offered=handoverChecklist(items), submitted=req.body.checklist??[];
+  if(!Array.isArray(submitted))throw httpErr(400,'Choose accessories from the handover checklist');
+  const confirmed=new Set();
+  for(const entry of submitted.filter(i=>i?.checked===true)){
+   const item=offered.find(i=>i.label===entry.label&&(!entry.key||i.key===entry.key));
+   if(!item)throw httpErr(409,'The handover checklist has changed. Reopen it to choose the accessories again.');
+   confirmed.add(item.key);
+  }
+  const pickupChecklist=offered.filter(i=>confirmed.has(i.key)).map(i=>({...i,checked:true}));
   const securityPending=!order.securityMethod;
   await chooseSecurity(order,req.body.securityMethod??order.securityMethod,session);
   if(order.securityMethod==='nic'){
@@ -59,16 +68,18 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
   const received=req.body.rentalPayment;
   if(received!==undefined){
    if(typeof received?.amount!=='number')throw httpErr(400,'Enter the rental payment received at pickup');
-   const amount=money(received.amount,'Pickup payment');
-   if(!PAYMENT_METHODS.includes(received.method))throw httpErr(400,'Choose how the pickup payment was received');
-   const balance=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
-   if(amount>balance)throw httpErr(409,'The pickup payment exceeds the current balance. Reopen the handover to see the latest balance.');
-   payment=await recordPayment(order,{amount,type:'balance',method:received.method,reference:'Pickup payment'},req.user,session);
+   const amount=money(received.amount,'Pickup payment',true);
+   if(amount>0){
+    if(!PAYMENT_METHODS.includes(received.method))throw httpErr(400,'Choose how the pickup payment was received');
+    const balance=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
+    if(amount>balance)throw httpErr(409,'The pickup payment exceeds the current balance. Reopen the handover to see the latest balance.');
+    payment=await recordPayment(order,{amount,type:'balance',method:received.method,reference:'Pickup payment'},req.user,session);
+   }
   }else if(req.body.payBalance){
    const amount=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
    if(amount)payment=await recordPayment(order,{amount,type:'balance',method:req.body.method},req.user,session);
   }
-  const [rental]=await Rental.create([{order:order._id,customer:order.customer,pickedUpAt:now,dueDate,pickupChecklist:required.map(label=>({label,checked:true}))}],{session});
+  const [rental]=await Rental.create([{order:order._id,customer:order.customer,pickedUpAt:now,dueDate,pickupChecklist}],{session});
   await allocateUnits(items,req.body.unitSelections,rental,session);
   order.startDate=now;order.endDate=dueDate;order.status='active';order.sendVia=['email','whatsapp','both','none'].includes(req.body.sendVia)?req.body.sendVia:'none';await order.save({session});
   await InventoryTransaction.insertMany(items.map(i=>({equipment:i.equipment._id,type:'rented_out',quantity:-i.quantity,reference:String(order._id)})),{session});

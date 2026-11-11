@@ -75,7 +75,7 @@ export const Rental = model('Rental', new Schema({
   order: ref('Order', { required: true }),
   customer: ref('Customer', { required: true }),
   pickedUpAt: Date, dueDate: { type: Date, required: true },
-  pickupChecklist: [{ label: String, checked: Boolean }],
+  pickupChecklist: [{ key: String, label: String, checked: Boolean }],
   latePeriodsCharged: { type: Number, default: 0 },
   lateFeePercentCharged: { type: Number, min: 0, max: 100 },
   status: { type: String, enum: ['out', 'returned', 'overdue'], default: 'out' },
@@ -89,7 +89,7 @@ export const Return = model('Return', new Schema({
   partial: Boolean,
   waivedFee: Number,
   waiverReason: String,
-  checklist: [{ label: String, checked: Boolean }],
+  checklist: [{ key: String, label: String, checked: Boolean, missing: Boolean, fee: Number }],
   notes: String,
 }, opts));
 
