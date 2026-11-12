@@ -1,6 +1,10 @@
-import { Counter, Order, Invoice } from '../models/index.js';
+import { Counter, Order, Invoice, Equipment } from '../models/index.js';
 
-const kinds = { order: { model: Order, field: 'orderNo', prefix: 'CL-' }, invoice: { model: Invoice, field: 'invoiceNo', prefix: 'INV-' } };
+const kinds = {
+  order: { model: Order, field: 'orderNo', prefix: 'CL-' },
+  invoice: { model: Invoice, field: 'invoiceNo', prefix: 'INV-' },
+  equipment: { model: Equipment, field: 'sku', prefix: 'EQ-' },
+};
 
 // Preserve a high-water mark even when the newest document is permanently deleted.
 export async function initializeDocumentNumbers() {

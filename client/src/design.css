@@ -2260,6 +2260,7 @@ td[data-actions] {
 .unit-code { font-family: ui-monospace, monospace; letter-spacing: .04em; }
 .unit-return-list { display: grid; gap: 10px; margin-top: 16px; }
 .unit-return-list label { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr); align-items: center; gap: 12px; margin: 0; }
+.initial-unit-conditions { max-height: 240px; overflow: auto; padding: 2px 6px 2px 2px; }
 @media (max-width: 400px) { .unit-return-list label { grid-template-columns: 1fr; gap: 4px; } .unit-grid { grid-template-columns: 1fr; } }
 .return-checklist-group { display: grid; gap: 10px; }
 .card .return-checklist-group p { margin: 0; }

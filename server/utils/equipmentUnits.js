@@ -4,18 +4,19 @@ import {units} from './operations.js';
 export const physicalStates=['good','out','damaged','repair'];
 export const damagedStates=['damaged','repair'];
 export function unitPrefix(value){const prefix=typeof value==='string'?value.trim().toUpperCase():'';if(!/^[A-Z0-9]{2,12}$/.test(prefix))throw httpErr(400,'Use 2–12 letters/numbers for the unit code prefix, for example SB');return prefix;}
-export async function addUnits(item,count,damaged,session){
+export async function addUnits(item,count,damaged,session,conditions){
  if(!count)return [];
  if(count>2000)throw httpErr(400,'Add at most 2,000 individually tracked units at a time');
  const counter=await Counter.findOneAndUpdate({_id:'unit:'+item.unitPrefix},{$inc:{value:count}},{new:true,upsert:true,session});
- return EquipmentUnit.insertMany(Array.from({length:count},(_,i)=>({equipment:item._id,code:item.unitPrefix+'-'+String(counter.value-count+i+1).padStart(3,'0'),state:i<damaged?'damaged':'good'})),{session});
+ return EquipmentUnit.insertMany(Array.from({length:count},(_,i)=>({equipment:item._id,code:item.unitPrefix+'-'+String(counter.value-count+i+1).padStart(3,'0'),state:conditions?.[i]??(i<damaged?'damaged':'good')})),{session});
 }
 export async function configureUnits(item,body,before,session){
  const enabled=body.trackUnits===undefined?!!before?.trackUnits:body.trackUnits;
  if(typeof enabled!=='boolean')throw httpErr(400,'Choose whether units are individually tracked');
  if(before?.trackUnits&&!enabled)throw httpErr(409,'Unit tracking cannot be disabled after labels have been assigned');
  if(!enabled){item.trackUnits=false;return;}
- const prefix=unitPrefix(body.unitPrefix??before?.unitPrefix);
+ const automaticPrefix=/^EQ-\d{4,10}$/.test(item.sku)?item.sku.replace('-',''):'EQ'+String(item._id).slice(-10);
+ const prefix=unitPrefix(body.unitPrefix??before?.unitPrefix??automaticPrefix);
  if(before?.trackUnits&&prefix!==before.unitPrefix)throw httpErr(409,'Existing unit codes cannot be renamed. Keep the original prefix.');
  if(!before?.trackUnits){
   const rentals=await Rental.find({status:{$in:['out','overdue']}}).select('order').session(session);
@@ -24,9 +25,10 @@ export async function configureUnits(item,body,before,session){
  item.trackUnits=true;item.unitPrefix=prefix;
  if(before?.trackUnits){
   if(item.totalQuantity<before.totalQuantity)throw httpErr(409,'Select the exact unit code to mark a unit lost or retired instead of reducing the total');
-  if(item.damagedQty!==before.damagedQty)throw httpErr(409,'Change the condition of the exact unit code instead of editing damaged quantity');
-  await addUnits(item,item.totalQuantity-before.totalQuantity,0,session);
- }else await addUnits(item,item.totalQuantity,item.damagedQty,session);
+  const newlyDamaged=body.unitConditions?.filter(condition=>condition==='damaged').length??0;
+  if(item.damagedQty!==before.damagedQty+newlyDamaged)throw httpErr(409,'Change the condition of the exact unit code instead of editing damaged quantity');
+  await addUnits(item,item.totalQuantity-before.totalQuantity,0,session,body.unitConditions);
+ }else await addUnits(item,item.totalQuantity,item.damagedQty,session,body.unitConditions);
 }
 export async function assertUnitTotals(item,session){
  if(!item.trackUnits)return;

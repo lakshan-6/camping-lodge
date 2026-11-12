@@ -5,24 +5,46 @@ import { mutate,audit,money,units,methodOf } from '../utils/operations.js';
 import { requirePermission, assertPermission } from '../utils/permissions.js';
 import {configureUnits,assertUnitTotals,physicalStates,damagedStates} from '../utils/equipmentUnits.js';
 import {stockSnapshot,checkStock} from '../utils/stock.js';
+import {nextDocumentNumber} from '../utils/documentNumbers.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const esc=s=>String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-function parse(body){const totalQuantity=units(body.totalQuantity,true),damagedQty=units(body.damagedQty||0,true);if(damagedQty>totalQuantity)throw httpErr(400,'Damaged quantity cannot exceed total stock');
+function parse(body,before){
  if(typeof body.name!=='string'||!body.name.trim()||typeof body.category!=='string'||!body.category.trim())throw httpErr(400,'Name and category are required');
- return {name:body.name.trim(),category:body.category.trim(),sku:body.sku||undefined,totalQuantity,damagedQty,periodRate:money(body.periodRate,'Rate',true),deposit:money(body.deposit||0,'Deposit',true),condition:body.condition||'good',notes:body.notes||'',checklist:Array.isArray(body.checklist)?body.checklist.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()).slice(0,30):[]};}
+ const totalQuantity=units(body.totalQuantity,true);
+ let damagedQty=units(body.damagedQty??before?.damagedQty??0,true);
+ if(body.unitConditions!==undefined){
+  const added=totalQuantity-(before?.trackUnits?before.totalQuantity:0);
+  if(added<0)throw httpErr(409,'Mark individual units lost or retired to reduce tracked stock');
+  if((body.trackUnits??before?.trackUnits)!==true||!Array.isArray(body.unitConditions)||body.unitConditions.length!==added||body.unitConditions.some(state=>!['good','damaged'].includes(state)))
+   throw httpErr(400,'Choose Ready or Damaged for each new unit');
+  damagedQty=(before?.trackUnits?before.damagedQty:0)+body.unitConditions.filter(state=>state==='damaged').length;
+ }
+ if(damagedQty>totalQuantity)throw httpErr(400,'Damaged quantity cannot exceed total stock');
+ return {name:body.name.trim(),category:body.category.trim(),sku:body.sku||before?.sku,totalQuantity,damagedQty,periodRate:money(body.periodRate,'Rate',true),deposit:money(body.deposit??before?.deposit??0,'Deposit',true),condition:body.condition||before?.condition||'good',notes:body.notes||'',checklist:Array.isArray(body.checklist)?body.checklist.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()).slice(0,30):[]};
+}
+async function allocateSku(data,session){
+ if(data.sku)return;
+ do {data.sku=await nextDocumentNumber('equipment',session);}
+ while(await Equipment.exists({sku:data.sku}).session(session));
+}
+r.get('/categories',wrap(async(req,res)=>{
+ const rows=await Equipment.find().select('category').lean();
+ res.json([...new Set(rows.map(row=>row.category))].sort((a,b)=>a.localeCompare(b)));
+}));
 r.get('/',wrap(async(req,res)=>{const f={active:req.query.archived!=='true'};if(req.query.category)f.category=String(req.query.category);if(req.query.q)f.$or=[{name:new RegExp(esc(req.query.q),'i')},{sku:new RegExp(esc(req.query.q),'i')}];res.json(await Equipment.find(f).sort({category:1,name:1}));}));
 r.post('/',requirePermission('inventory.manage'),wrap(async(req,res)=>res.status(201).json(await mutate(req,'equipment.create',async session=>{
- const [item]=await Equipment.create([parse(req.body)],{session});await configureUnits(item,req.body,null,session);await item.save({session});if(item.totalQuantity)await InventoryTransaction.create([{equipment:item._id,type:'initial_stock',quantity:item.totalQuantity}],{session});await audit(session,req.user,'equipment.created',item._id,null,item);return item;
+ const data=parse(req.body);await allocateSku(data,session);
+ const [item]=await Equipment.create([data],{session});await configureUnits(item,req.body,null,session);await item.save({session});if(item.totalQuantity)await InventoryTransaction.create([{equipment:item._id,type:'initial_stock',quantity:item.totalQuantity}],{session});await audit(session,req.user,'equipment.created',item._id,null,item);return item;
 }))));
 r.put('/:id',requirePermission('inventory.manage'),wrap(async(req,res)=>res.json(await mutate(req,'equipment.edit:'+req.params.id,async session=>{
- const item=await Equipment.findById(req.params.id).session(session);if(!item)throw httpErr(404,'Item not found');const data=parse(req.body),before=item.toObject();
+ const item=await Equipment.findById(req.params.id).session(session);if(!item)throw httpErr(404,'Item not found');const before=item.toObject(),data=parse(req.body,before);
  const bookings=await Order.find({status:{$in:['reserved','active']}}).select('_id startDate endDate status').session(session);
  const lines=await OrderItem.find({equipment:item._id,order:{$in:bookings.map(o=>o._id)}}).session(session);
  const events=[];for(const line of lines){const order=bookings.find(o=>String(o._id)===String(line.order)),q=line.quantity-(line.returnedQuantity||0);events.push([order.status==='active'?0:+order.startDate,q],[order.status==='active'?Infinity:+order.endDate,-q]);}
  events.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);let current=0,max=0;for(const [,n]of events){current+=n;max=Math.max(max,current);}
  if(data.totalQuantity-data.damagedQty<max)throw httpErr(409,'Stock reduction would leave existing bookings without enough equipment');
  const open=await Repair.find({equipment:item._id,status:'open'}).session(session);if(data.damagedQty<open.reduce((s,x)=>s+x.quantity,0))throw httpErr(409,'Complete open repair jobs before reducing damaged stock');
- await assertUnitTotals(item,session);item.set(data);await configureUnits(item,req.body,before,session);item.revision++;await item.save({session});if(item.totalQuantity!==before.totalQuantity)await InventoryTransaction.create([{equipment:item._id,type:'adjustment',quantity:item.totalQuantity-before.totalQuantity,note:'Inventory edit'}],{session});await audit(session,req.user,'equipment.edited',item._id,before,item);return item;
+ await assertUnitTotals(item,session);await allocateSku(data,session);item.set(data);await configureUnits(item,req.body,before,session);item.revision++;await item.save({session});if(item.totalQuantity!==before.totalQuantity)await InventoryTransaction.create([{equipment:item._id,type:'adjustment',quantity:item.totalQuantity-before.totalQuantity,note:'Inventory edit'}],{session});await audit(session,req.user,'equipment.edited',item._id,before,item);return item;
 }))));
 r.delete('/:id',requirePermission('inventory.manage'),wrap(async(req,res)=>res.json(await mutate(req,'equipment.archive:'+req.params.id,async session=>{
  const item=await Equipment.findById(req.params.id).session(session);if(!item)throw httpErr(404,'Item not found');const orders=await Order.find({status:{$in:['reserved','active']}}).select('_id').session(session);
