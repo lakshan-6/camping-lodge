@@ -81,14 +81,13 @@ export default function Inventory({me}) {
         <EmptyState icon="tent" title="No equipment found" description={q||cat?'Try another search or choose a different category.':'Add your first item to start building your inventory.'}/>
       ) : (
         <div className="tablewrap"><ResponsiveTable>
-          <thead><tr><th>Item</th><th>Category</th><th>Units</th><th>Rate / 36h</th><th>Deposit</th><th>Condition</th><th></th></tr></thead>
+          <thead><tr><th>Item</th><th>Category</th><th>Units</th><th>Rate / 36h</th><th>Condition</th><th></th></tr></thead>
           <tbody>{items.map(i => (
             <tr key={i._id}>
               <td data-l="Item"><b>{i.name}</b>{i.sku && <small> {i.sku}</small>}</td>
               <td data-l="Category">{i.category}</td>
               <td data-l="Units">{i.totalQuantity}{i.damagedQty > 0 && <small>{i.damagedQty} damaged</small>}{i.trackUnits&&<small>Individually labelled</small>}</td>
               <td data-l="Rate / 36h">{lkr(i.periodRate)}</td>
-              <td data-l="Deposit">{lkr(i.deposit)}</td>
               <td data-l="Condition">{i.trackUnits
                 ?<span className={'tag '+(i.damagedQty?'needs_repair':'good')}>{i.damagedQty?'Units need attention':'No damaged units'}</span>
                 :<span className={'tag ' + i.condition}>{condLabel[i.condition]}</span>}</td>
