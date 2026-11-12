@@ -145,7 +145,7 @@ test('NIC custody and labelled equipment use real isolated transactions',{timeou
  });
  await t.test('inventory reuses categories and generates stable name-based SKUs and exact unit conditions',async()=>{
   const counter=await M.Counter.findById('equipment');
-  const occupied='SLE-FOM-'+String(counter.value+1).padStart(4,'0');
+  const occupied='SFM'+(counter.value+1);
   const legacy=await ok('/equipment','POST',{name:'Legacy lantern',category:'Lighting',sku:occupied.toLowerCase(),totalQuantity:1,periodRate:100});
   await ok('/equipment/'+legacy._id,'DELETE',{});
   const body={name:'Foam mat',category:'Sleeping',totalQuantity:2,periodRate:150.50,trackUnits:true,unitConditions:['good','damaged'],requestId:crypto.randomUUID()};
@@ -153,24 +153,30 @@ test('NIC custody and labelled equipment use real isolated transactions',{timeou
   assert.equal((await request('/equipment','POST',{...body,unitConditions:['good','out']})).status,400);
   const item=await ok('/equipment','POST',body);
   assert.equal((await ok('/equipment','POST',body))._id,item._id);
-  assert.match(item.sku,/^SLE-FOM-\d{4,}$/);assert.notEqual(item.sku,occupied);
+  assert.match(item.sku,/^SFM[1-9]\d*$/);assert.notEqual(item.sku,occupied);
   const duplicate=await ok('/equipment','POST',{...body,requestId:crypto.randomUUID()});
-  assert.match(duplicate.sku,/^SLE-FOM-\d{4,}$/);assert.notEqual(duplicate.sku,item.sku);
+  assert.match(duplicate.sku,/^SFM[1-9]\d*$/);assert.notEqual(duplicate.sku,item.sku);
   assert.equal(item.damagedQty,1);assert.equal(item.deposit,0);
   const tracked=async()=> (await ok('/equipment/'+item._id+'/units')).units;
   const initial=await tracked();
   assert.deepEqual(initial.map(unit=>unit.state),['good','damaged']);
-  assert.equal(initial[0].code,item.sku.replaceAll('-','')+'-001');
+  assert.equal(initial[0].code,item.sku+'-001');
   const edited=await ok('/equipment/'+item._id,'PUT',{...body,name:'Foam Sleeping Mat',totalQuantity:3,unitConditions:['damaged']});
   assert.equal(edited.sku,item.sku);assert.equal(edited.damagedQty,2);
   assert.deepEqual((await tracked()).map(unit=>unit.state),['good','damaged','damaged']);
   assert.deepEqual((await tracked()).slice(0,2).map(unit=>unit._id),initial.map(unit=>unit._id));
   assert.deepEqual(await ok('/equipment/categories'),['Cooking','Lighting','Sleeping']);
+  const oldSku=await ok('/equipment','POST',{...body,sku:'SLE-FOM-0150',requestId:crypto.randomUUID()});
+  const oldUnits=(await ok('/equipment/'+oldSku._id+'/units')).units;
+  assert.equal(oldUnits[0].code,'SLEFOM0150-001');
   await M.Counter.updateOne({_id:'equipment'},{$set:{value:0}});
   await initializeDocumentNumbers();
   const bag=await ok('/equipment','POST',{...body,name:'Sleeping Bag Anko',requestId:crypto.randomUUID()});
-  assert.match(bag.sku,/^SLE-SBA-\d{4,}$/);
-  assert.ok(Number(bag.sku.split('-').at(-1))>Number(duplicate.sku.split('-').at(-1)));
+  assert.equal(bag.sku,'SSB151');
+  await M.Counter.updateOne({_id:'equipment'},{$set:{value:0}});
+  await initializeDocumentNumbers();
+  const anotherBag=await ok('/equipment','POST',{...body,name:'Sleeping Bag Anko',requestId:crypto.randomUUID()});
+  assert.equal(anotherBag.sku,'SSB152');
  });
  await t.test('encrypted backup validation includes physical units and rejects broken allocations',async()=>{
   const envelope=backupEnvelope(await createBackup('unit-test')),valid=await validateBackup(envelope);assert.ok(valid.summary.collections.EquipmentUnit>=10);

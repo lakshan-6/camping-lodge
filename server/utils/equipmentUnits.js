@@ -1,6 +1,7 @@
 import {Counter,EquipmentUnit,OrderItem,Rental,Repair} from '../models/index.js';
 import {httpErr} from './availability.js';
 import {units} from './operations.js';
+import {shortEquipmentSkuPattern} from './documentNumbers.js';
 export const physicalStates=['good','out','damaged','repair'];
 export const damagedStates=['damaged','repair'];
 export function unitPrefix(value){const prefix=typeof value==='string'?value.trim().toUpperCase():'';if(!/^[A-Z0-9]{2,12}$/.test(prefix))throw httpErr(400,'Use 2–12 letters/numbers for the unit code prefix, for example SB');return prefix;}
@@ -16,8 +17,8 @@ export async function configureUnits(item,body,before,session){
  if(before?.trackUnits&&!enabled)throw httpErr(409,'Unit tracking cannot be disabled after labels have been assigned');
  if(!enabled){item.trackUnits=false;return;}
  const skuPrefix=item.sku?.replaceAll('-','');
- const automaticPrefix=/^(?:EQ|[A-Z0-9]{3}-[A-Z0-9]{3})-\d+$/.test(item.sku)&&skuPrefix.length<=12
-  ?skuPrefix:'EQ'+String(item._id).slice(-10);
+ const readableSku=shortEquipmentSkuPattern.test(item.sku)||/^(?:EQ|[A-Z0-9]{3}-[A-Z0-9]{3})-\d+$/.test(item.sku);
+ const automaticPrefix=readableSku&&skuPrefix.length<=12?skuPrefix:'EQ'+String(item._id).slice(-10);
  const prefix=unitPrefix(body.unitPrefix??before?.unitPrefix??automaticPrefix);
  if(before?.trackUnits&&prefix!==before.unitPrefix)throw httpErr(409,'Existing unit codes cannot be renamed. Keep the original prefix.');
  if(!before?.trackUnits){

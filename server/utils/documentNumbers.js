@@ -1,19 +1,23 @@
 import { Counter, Order, Invoice, Equipment } from '../models/index.js';
 
+export const shortEquipmentSkuPattern = /^[A-Z]{3}[1-9][0-9]*$/;
+
 const kinds = {
   order: { model: Order, field: 'orderNo', prefix: 'CL-' },
   invoice: { model: Invoice, field: 'invoiceNo', prefix: 'INV-' },
   equipment: {
-    model: Equipment, field: 'sku', prefix: 'EQ-',
-    alternateFormat: { pattern: /^[A-Z0-9]{3}-[A-Z0-9]{3}-[0-9]+$/, offset: 8 },
+    model: Equipment, field: 'sku', prefix: 'EQ-', numberWidth: 1,
+    additionalFormats: [
+      { pattern: /^[A-Z0-9]{3}-[A-Z0-9]{3}-[0-9]+$/, offset: 8 },
+      { pattern: shortEquipmentSkuPattern, offset: 3 },
+    ],
   },
 };
 
 // Preserve a high-water mark even when the newest document is permanently deleted.
 export async function initializeDocumentNumbers() {
-  for (const [kind, { model, field, prefix, alternateFormat }] of Object.entries(kinds)) {
-    const formats = [{ pattern: new RegExp('^' + prefix + '[0-9]+$'), offset: prefix.length }];
-    if (alternateFormat) formats.push(alternateFormat);
+  for (const [kind, { model, field, prefix, additionalFormats = [] }] of Object.entries(kinds)) {
+    const formats = [{ pattern: new RegExp('^' + prefix + '[0-9]+$'), offset: prefix.length }, ...additionalFormats];
     const matches = await Promise.all(formats.map(({pattern,offset})=>model.aggregate([
       { $match: { [field]: pattern } },
       { $project: { number: { $convert: { input: { $substrBytes: ['$' + field, offset, 32] }, to: 'double', onError: 0, onNull: 0 } } } },
@@ -28,5 +32,5 @@ export async function initializeDocumentNumbers() {
 export async function nextDocumentNumber(kind, session = null, prefix = kinds[kind]?.prefix) {
   const counter = await Counter.findOneAndUpdate({ _id: kind }, { $inc: { value: 1 } }, { new: true, session });
   if (!counter || !kinds[kind]) throw new Error('Document counters have not been initialized');
-  return prefix + String(counter.value).padStart(4, '0');
+  return prefix + String(counter.value).padStart(kinds[kind].numberWidth ?? 4, '0');
 }
