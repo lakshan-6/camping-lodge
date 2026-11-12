@@ -143,27 +143,34 @@ test('NIC custody and labelled equipment use real isolated transactions',{timeou
   const legacyOrder=await booking(1,'money',other._id,legacy._id),started=await ok('/rentals/start','POST',{order:legacyOrder._id,securityMethod:'money',securityDeposit:{received:true,amount:100},payBalance:true,method:'cash',sendVia:'none',requestId:crypto.randomUUID()});assert.equal((await request('/equipment/'+legacy._id,'PUT',{...legacy,damagedQty:0,trackUnits:true,unitPrefix:'POT'})).status,409);await ok('/returns','POST',{rental:started._id,items:[{equipment:legacy._id,quantityReturned:1}],requestId:crypto.randomUUID()});
   const enabled=await ok('/equipment/'+legacy._id,'PUT',{...legacy,damagedQty:0,trackUnits:true,unitPrefix:'POT'});assert.equal(enabled.trackUnits,true);assert.equal((await ok('/equipment/'+legacy._id+'/units')).units.length,2);
  });
- await t.test('inventory reuses categories and generates unique SKUs and conditions for each new unit',async()=>{
+ await t.test('inventory reuses categories and generates stable name-based SKUs and exact unit conditions',async()=>{
   const counter=await M.Counter.findById('equipment');
-  const occupied='EQ-'+String(counter.value+1).padStart(4,'0');
-  const legacy=await ok('/equipment','POST',{name:'Legacy lantern',category:'Lighting',sku:occupied,totalQuantity:1,periodRate:100});
+  const occupied='SLE-FOM-'+String(counter.value+1).padStart(4,'0');
+  const legacy=await ok('/equipment','POST',{name:'Legacy lantern',category:'Lighting',sku:occupied.toLowerCase(),totalQuantity:1,periodRate:100});
   await ok('/equipment/'+legacy._id,'DELETE',{});
   const body={name:'Foam mat',category:'Sleeping',totalQuantity:2,periodRate:150.50,trackUnits:true,unitConditions:['good','damaged'],requestId:crypto.randomUUID()};
   assert.equal((await request('/equipment','POST',{...body,unitConditions:['good']})).status,400);
   assert.equal((await request('/equipment','POST',{...body,unitConditions:['good','out']})).status,400);
   const item=await ok('/equipment','POST',body);
   assert.equal((await ok('/equipment','POST',body))._id,item._id);
-  assert.match(item.sku,/^EQ-\d+$/);assert.notEqual(item.sku,occupied);
+  assert.match(item.sku,/^SLE-FOM-\d{4,}$/);assert.notEqual(item.sku,occupied);
+  const duplicate=await ok('/equipment','POST',{...body,requestId:crypto.randomUUID()});
+  assert.match(duplicate.sku,/^SLE-FOM-\d{4,}$/);assert.notEqual(duplicate.sku,item.sku);
   assert.equal(item.damagedQty,1);assert.equal(item.deposit,0);
   const tracked=async()=> (await ok('/equipment/'+item._id+'/units')).units;
   const initial=await tracked();
   assert.deepEqual(initial.map(unit=>unit.state),['good','damaged']);
-  assert.equal(initial[0].code,item.sku.replace('-','')+'-001');
-  const edited=await ok('/equipment/'+item._id,'PUT',{...body,totalQuantity:3,unitConditions:['damaged']});
+  assert.equal(initial[0].code,item.sku.replaceAll('-','')+'-001');
+  const edited=await ok('/equipment/'+item._id,'PUT',{...body,name:'Foam Sleeping Mat',totalQuantity:3,unitConditions:['damaged']});
   assert.equal(edited.sku,item.sku);assert.equal(edited.damagedQty,2);
   assert.deepEqual((await tracked()).map(unit=>unit.state),['good','damaged','damaged']);
   assert.deepEqual((await tracked()).slice(0,2).map(unit=>unit._id),initial.map(unit=>unit._id));
   assert.deepEqual(await ok('/equipment/categories'),['Cooking','Lighting','Sleeping']);
+  await M.Counter.updateOne({_id:'equipment'},{$set:{value:0}});
+  await initializeDocumentNumbers();
+  const bag=await ok('/equipment','POST',{...body,name:'Sleeping Bag Anko',requestId:crypto.randomUUID()});
+  assert.match(bag.sku,/^SLE-SBA-\d{4,}$/);
+  assert.ok(Number(bag.sku.split('-').at(-1))>Number(duplicate.sku.split('-').at(-1)));
  });
  await t.test('encrypted backup validation includes physical units and rejects broken allocations',async()=>{
   const envelope=backupEnvelope(await createBackup('unit-test')),valid=await validateBackup(envelope);assert.ok(valid.summary.collections.EquipmentUnit>=10);

@@ -22,10 +22,16 @@ function parse(body,before){
  if(damagedQty>totalQuantity)throw httpErr(400,'Damaged quantity cannot exceed total stock');
  return {name:body.name.trim(),category:body.category.trim(),sku:body.sku||before?.sku,totalQuantity,damagedQty,periodRate:money(body.periodRate,'Rate',true),deposit:money(body.deposit??before?.deposit??0,'Deposit',true),condition:body.condition||before?.condition||'good',notes:body.notes||'',checklist:Array.isArray(body.checklist)?body.checklist.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()).slice(0,30):[]};
 }
+function skuSegment(value,fallback){
+ const [first='',second='',third='']=value.normalize('NFKD').replace(/\p{M}/gu,'').toUpperCase().match(/[A-Z0-9]+/g)||[];
+ const abbreviation=third?first[0]+second[0]+third[0]:first.slice(0,second?2:3)+second.slice(0,1);
+ return (abbreviation||fallback).padEnd(3,'0');
+}
 async function allocateSku(data,session){
  if(data.sku)return;
- do {data.sku=await nextDocumentNumber('equipment',session);}
- while(await Equipment.exists({sku:data.sku}).session(session));
+ const prefix=skuSegment(data.category,'GEA')+'-'+skuSegment(data.name,'ITM')+'-';
+ do {data.sku=await nextDocumentNumber('equipment',session,prefix);}
+ while(await Equipment.exists({sku:new RegExp('^'+data.sku+'$','i')}).session(session));
 }
 r.get('/categories',wrap(async(req,res)=>{
  const rows=await Equipment.find().select('category').lean();

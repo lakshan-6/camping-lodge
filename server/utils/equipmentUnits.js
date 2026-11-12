@@ -15,7 +15,9 @@ export async function configureUnits(item,body,before,session){
  if(typeof enabled!=='boolean')throw httpErr(400,'Choose whether units are individually tracked');
  if(before?.trackUnits&&!enabled)throw httpErr(409,'Unit tracking cannot be disabled after labels have been assigned');
  if(!enabled){item.trackUnits=false;return;}
- const automaticPrefix=/^EQ-\d{4,10}$/.test(item.sku)?item.sku.replace('-',''):'EQ'+String(item._id).slice(-10);
+ const skuPrefix=item.sku?.replaceAll('-','');
+ const automaticPrefix=/^(?:EQ|[A-Z0-9]{3}-[A-Z0-9]{3})-\d+$/.test(item.sku)&&skuPrefix.length<=12
+  ?skuPrefix:'EQ'+String(item._id).slice(-10);
  const prefix=unitPrefix(body.unitPrefix??before?.unitPrefix??automaticPrefix);
  if(before?.trackUnits&&prefix!==before.unitPrefix)throw httpErr(409,'Existing unit codes cannot be renamed. Keep the original prefix.');
  if(!before?.trackUnits){

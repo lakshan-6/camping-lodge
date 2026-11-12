@@ -119,7 +119,7 @@ export default function Inventory({me}) {
             {(!categories.length||enteringNewCategory)&&<label>{categories.length?'New category name':'Category'}
               <input required value={form.category} onChange={set('category')} placeholder="Tents, Sleeping, Cooking…" />
             </label>}
-            <label>SKU<input readOnly value={form.sku||''} placeholder="Assigned when saved" /></label>
+            <label>SKU<input readOnly value={form.sku||''} placeholder="Generated from category and name on save" /></label>
             <div className="row">
               <label>Total units<input type="number" step="1" min={existingUnits} max={form.trackUnits?existingUnits+maxNewUnits:undefined} required value={form.totalQuantity} onChange={set('totalQuantity')} /></label>
               <label>Rate per 36h (LKR)<input type="number" min="0" step="0.01" required value={form.periodRate} onChange={set('periodRate')} /></label>
