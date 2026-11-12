@@ -2,7 +2,7 @@ import ResponsiveTable from './ResponsiveTable.jsx';
 import {useEffect,useState} from 'react';
 import {api,getToken,lkr} from '../api.js';
 import {can} from '../permissions.js';
-import {sendInvoiceWhatsApp} from '../whatsapp.js';
+import {getOrderWhatsAppUpdates,sendInvoiceWhatsApp} from '../whatsapp.js';
 import SecurityDeposit from './SecurityDeposit.jsx';
 import {emailStatusMessage} from '../emailStatus.js';
 import {formatPickup,formatReturn} from '../businessTime.js';
@@ -10,11 +10,11 @@ import SettlementDialog from './SettlementDialog.jsx';
 const labels={deposit:'Rental advance',rental:'Rental payment',balance:'Rental balance',fee:'Extra charge',refund:'Refund to customer'};
 const emailLabels={booking:'Booking confirmation',pickup:'Pickup confirmation',payment:'Rental payment',deposit:'Security deposit',return:'Equipment return',settlement:'Return settlement'};
 export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions=true,nextAction}){
- const [data,setData]=useState(null),[error,setError]=useState(''),[form,setForm]=useState(null),[busy,setBusy]=useState(false),[email,setEmail]=useState(false),[history,setHistory]=useState(null);
+ const [data,setData]=useState(null),[error,setError]=useState(''),[form,setForm]=useState(null),[busy,setBusy]=useState(false),[settings,setSettings]=useState(null),[history,setHistory]=useState(null);
  const [notice,setNotice]=useState('');
  const [settling,setSettling]=useState(false);
  const load=()=>api('/orders/'+id+'/detail').then(setData).catch(e=>setError(e.message));
- useEffect(()=>{load();api('/settings').then(s=>setEmail(s.emailConfigured));},[id]);
+ useEffect(()=>{load();api('/settings').then(setSettings).catch(()=>{});},[id]);
  const open=(mode,type)=>{setError('');setNotice('');const depositDue=Math.max(0,Math.round((data.depositAmount-data.securityHeld)*100)/100);setForm({mode,type,amount:mode==='security'?(type==='collect'?depositDue:data.securityHeld):type==='refund'?data.paid:Math.max(0,data.totalAmount-data.paid),method:'cash',reason:'',allowOverpayment:false,requestId:crypto.randomUUID()});};
  async function save(e){e.preventDefault();if(busy)return;setBusy(true);setError('');try{const saved=await api(form.mode==='security'?'/payments/deposits':'/payments',{method:'POST',body:{...form,amount:Number(form.amount),order:id}});setForm(null);setNotice(`Transaction saved. ${emailStatusMessage(saved.notificationEmail)}`.trim());await load();onSaved?.();}catch(x){setError(x.message);}finally{setBusy(false);}}
  async function pdf(invoice){try{const r=await fetch(`/api/invoices/${invoice._id}/pdf`,{headers:{Authorization:'Bearer '+getToken()}});if(!r.ok)throw new Error('Could not open PDF');const url=URL.createObjectURL(await r.blob());window.open(url,'_blank');}catch(e){setError(e.message);}}
@@ -24,6 +24,7 @@ export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions
   try{const result=await api('/orders/'+id+'/retry-booking-email',{method:'POST'});setNotice(emailStatusMessage(result.status));await load();}
   catch(e){setError(e.message);}finally{setBusy(false);}
  }
+ const whatsappUpdates=data?getOrderWhatsAppUpdates(data,settings?.businessName):[];
  if(settling)return <SettlementDialog order={data} me={me} onClose={()=>setSettling(false)} onSaved={async message=>{
   setSettling(false);setNotice(message);await load();onSaved?.();
  }}/>;
@@ -35,6 +36,13 @@ export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions
  {!nextAction&&data.status==='settlement_pending'&&can(me,'returns.write')&&<button onClick={()=>setSettling(true)}>Complete settlement</button>}
  <div className="metric-row"><p>Pickup <b>{formatPickup(data)}</b></p><p>Return <b>{formatReturn(data)}</b></p><p>Rental total <b>{lkr(data.totalAmount)}</b></p><p>Rental balance <b>{lkr(data.status==='cancelled'?0:data.totalAmount-data.paid)}</b></p></div>
  <ResponsiveTable><thead><tr><th>Item</th><th>Qty</th><th>Returned</th><th>Unit codes</th><th>Amount</th></tr></thead><tbody>{data.items.map(i=><tr key={i._id}><td>{i.equipment?.name}</td><td>{i.quantity}</td><td>{i.returnedQuantity||0}</td><td>{i.unitAssignments?.length?i.unitAssignments.map(u=><small key={u.unit}><b>{u.code}</b> · {u.outcome}</small>):'Quantity tracked'}</td><td>{lkr(i.lineTotal)}</td></tr>)}</tbody></ResponsiveTable>
+ {whatsappUpdates.length>0&&<details className="desk-actions">
+  <summary>WhatsApp updates</summary>
+  <p className="hint">Review the message in WhatsApp, then press Send.</p>
+  <div className="bar">
+   {whatsappUpdates.map(({key,label,url})=><a key={key} className="btn" href={url} target="_blank" rel="noopener noreferrer">{label}</a>)}
+  </div>
+ </details>}
  {(showPaymentActions||!can(me,'finance.view')&&!can(me,'payments.refund'))&&can(me,'payments.record')&&!['cancelled','settlement_pending'].includes(data.status)&&data.totalAmount>data.paid&&<button onClick={()=>open('rental',data.paid===0?'deposit':'balance')}>Record rental payment</button>}
  {showPaymentActions&&['finance.view','payments.record','payments.refund'].some(permission=>can(me,permission))&&<details className="desk-actions"><summary>More payment actions</summary><div className="bar">
  {can(me,'payments.record')&&can(me,'payments.refund')&&data.status!=='cancelled'&&data.totalAmount<=data.paid&&<button onClick={()=>open('rental','balance')}>Record overpayment</button>}
@@ -51,7 +59,7 @@ export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions
  <div className="bar"><button type="button" onClick={()=>setForm(null)} disabled={busy}>Cancel</button><button className="btn" disabled={busy}>{busy?'Saving…':'Save transaction'}</button></div></form>}
  <SecurityDeposit key={data._id} order={data} me={me} onSaved={async()=>{await load();onSaved?.();}}/>
  {data.payments?.length>0&&<details className="desk-actions"><summary>Rental payment history</summary><ResponsiveTable><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Method / reference</th></tr></thead><tbody>{data.payments.map(p=><tr key={p._id}><td>{new Date(p.paidAt).toLocaleString('en-LK',{timeZone:'Asia/Colombo'})}</td><td>{labels[p.type]||p.type}</td><td>{p.type==='refund'?'-':''}{lkr(p.amount)}</td><td>{[p.method,p.reference].filter(Boolean).join(' · ')}</td></tr>)}</tbody></ResponsiveTable></details>}
- <details className="desk-actions"><summary>Invoices and sharing</summary>{data.invoices.map(i=><div className="notice" key={i._id}><b>{i.invoiceNo}</b> · {i.status} · {lkr(i.total)}<div className="bar"><button onClick={()=>pdf(i)}>PDF / print</button>{i.status!=='void'&&<><button onClick={()=>sendInvoiceWhatsApp(i._id)}>WhatsApp</button>{email&&<button onClick={()=>api(`/invoices/${i._id}/email`,{method:'POST'}).catch(e=>setError(e.message))}>Email PDF</button>}</>}</div>{i.status==='issued'&&can(me,'payments.refund')&&<details className="desk-actions"><summary>More invoice actions</summary><button onClick={()=>{if(confirm('Void this invoice? Payment records are kept.'))api(`/invoices/${i._id}/void`,{method:'PATCH'}).then(load).catch(e=>setError(e.message));}}>Void invoice</button></details>}</div>)}
+ <details className="desk-actions"><summary>Invoices and sharing</summary>{data.invoices.map(i=><div className="notice" key={i._id}><b>{i.invoiceNo}</b> · {i.status} · {lkr(i.total)}<div className="bar"><button onClick={()=>pdf(i)}>PDF / print</button>{i.status!=='void'&&<><button onClick={()=>sendInvoiceWhatsApp(i._id)}>WhatsApp</button>{settings?.emailConfigured&&<button onClick={()=>api(`/invoices/${i._id}/email`,{method:'POST'}).catch(e=>setError(e.message))}>Email PDF</button>}</>}</div>{i.status==='issued'&&can(me,'payments.refund')&&<details className="desk-actions"><summary>More invoice actions</summary><button onClick={()=>{if(confirm('Void this invoice? Payment records are kept.'))api(`/invoices/${i._id}/void`,{method:'PATCH'}).then(load).catch(e=>setError(e.message));}}>Void invoice</button></details>}</div>)}
  {!data.invoices.some(i=>i.status!=='void')&&data.status!=='cancelled'&&can(me,'payments.record')&&<button onClick={()=>api('/invoices',{method:'POST',body:{order:id,requestId:crypto.randomUUID()}}).then(load).catch(e=>setError(e.message))}>Create invoice</button>}
  </details>
  {data.emailHistory?.length>0&&<details className="desk-actions"><summary>Customer emails</summary>
