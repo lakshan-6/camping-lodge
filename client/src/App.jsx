@@ -30,9 +30,10 @@ const nav = [
   ['/orders', 'Orders','orders','Rental desk'], ['/availability', 'Check Availability','search','Rental desk'], ['/rentals', 'Rentals','pickup','Rental desk'], ['/returns', 'Returns','returns','Rental desk'], ['/customers', 'Customers','users','Rental desk'],
   ['/inventory', 'Inventory','box','Equipment'], ['/stock-counts','Stock count','clipboard','Equipment'], ['/repairs','Repairs','repair','Equipment'],
   ['/money', 'Money / මුදල්','wallet','Finance'], ['/expenses','Expenses','receipt','Finance'], ['/reports', 'Reports','report','Finance'],
-  ['/staff', 'Staff Access','users','Management'], ['/settings', 'Settings','settings','Management'], ['/activity','Activity history','activity','Management'], ['/backups','Backups','backup','Management'], ['/security','Account security','shield','Management'],
+  ['/staff', 'Staff Access','users','Management'], ['/settings', 'Settings','settings','Management'], ['/orders/maintenance','Order maintenance','orders','Management'], ['/activity','Activity history','activity','Management'], ['/backups','Backups','backup','Management'], ['/security','Account security','shield','Management'],
 ];
 const adminOnly = ['/dashboard','/reports', '/settings', '/staff'];
+const mainNavigation=['/','/orders','/inventory','/money','/customers'];
 const intros={
  '/availability':['Plan ahead','Find the right gear, at the right time.','Choose pickup and return times to see what is available for your next booking.'],
  '/rentals':['Handover & tracking','Ready for the road.','Manage upcoming pickups, equipment with customers and rental extensions.'],
@@ -71,7 +72,7 @@ export default function App() {
     const keydown=e=>{
       if(e.key==='Escape'){e.preventDefault();setOpen(false);}
       if(e.key==='Tab'){
-        const targets=[...navRef.current.querySelectorAll('a[href],button:not([disabled])')].filter(el=>el.getClientRects().length),first=targets[0],last=targets.at(-1);
+        const targets=[...navRef.current.querySelectorAll('a[href],button:not([disabled]),summary')].filter(el=>el.getClientRects().length),first=targets[0],last=targets.at(-1);
         if(!navRef.current.contains(document.activeElement)){e.preventDefault();(e.shiftKey?last:first)?.focus();}
         else if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}
         else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}
@@ -93,12 +94,13 @@ export default function App() {
   if (!ready) return <div className="app-loading" role="status"><Icon name="tent" size={36}/><p>Opening Camping Lodge…</p></div>;
   if (!user) return <Login onLogin={setUser} />;
   const admin = ['owner', 'admin'].includes(user.role);
-  const pages = { '/': <Today me={user}/>, '/dashboard': <Dashboard me={user}/>, '/inventory': <Inventory me={user}/>, '/stock-counts':<StockCounts/>, '/availability': <Availability />, '/orders': <Orders me={user} />,
+  const pages = { '/': <Today me={user}/>, '/dashboard': <Dashboard me={user}/>, '/inventory': <Inventory me={user}/>, '/stock-counts':<StockCounts/>, '/availability': <Availability me={user}/>, '/orders': <Orders key="orders" me={user} />,
+    '/orders/maintenance': <Orders key="order-maintenance" me={user} maintenance/>,
     '/rentals': <Rentals me={user}/>, '/returns': <Returns me={user}/>, '/customers': <Customers me={user}/>, '/calendar': <Calendar />,
     '/money': <Money me={user}/>, '/reports': <Reports />, '/settings': <Settings onSaved={setSt} />, '/staff': <Staff me={user} />,
     '/repairs':<Repairs me={user}/>, '/expenses':<Expenses/>, '/activity':<Activity/>, '/backups':<Backups/>, '/security':<AccountSecurity/> };
   const items = nav.filter(([to]) => {
-    if(['/activity','/backups','/security'].includes(to))return user.role==='owner';
+    if(['/activity','/backups','/security','/orders/maintenance'].includes(to))return user.role==='owner';
     if(['/repairs','/stock-counts'].includes(to))return can(user,'inventory.manage');
     if(to==='/expenses')return can(user,'expenses.manage');
     if(to==='/reports')return can(user,'reports.view');
@@ -110,14 +112,21 @@ export default function App() {
   const initials=user.name.trim().split(/\s+/).slice(0,2).map(n=>n[0]).join('').toUpperCase();
   const date=new Intl.DateTimeFormat('en-LK',{timeZone:'Asia/Colombo',weekday:'short',day:'numeric',month:'short',year:'numeric'}).format(new Date());
   const logout = async () => { try { await api('/auth/logout', { method: 'POST' }); } catch { /* ignore */ } setToken(null); location.reload(); };
+  const primaryItems=items.filter(([to])=>mainNavigation.includes(to));
+  const moreItems=items.filter(([to])=>!mainNavigation.includes(to));
+  const navLink=([to,label,icon])=><NavLink key={to} to={to} end onClick={()=>setOpen(false)}><Icon name={icon} size={19}/><span>{label}</span>{to==='/staff'&&<span className="online" title="People online now">{online}</span>}</NavLink>;
 
   return (
     <div className="shell">
       <a className="skip-link" href="#main-content">Skip to content</a>
       <aside ref={navRef} className={open ? 'side open' : 'side'} aria-label="Main navigation" id="main-navigation">
         <div className="brand"><img src="/logo.png" alt="" className="logo"/><div>{st.businessName}<small>Rental management</small></div><button className="close-menu icon-button" onClick={()=>setOpen(false)} aria-label="Close menu"><Icon name="close"/></button></div>
-        <nav aria-label="Workspace" onClick={() => setOpen(false)}>
-          {[...new Set(items.map(n=>n[3]))].map(group=><div className="nav-group" key={group}><p className="nav-heading">{group}</p>{items.filter(n=>n[3]===group).map(([to,label,icon])=><NavLink key={to} to={to} end={to==='/'}><Icon name={icon} size={19}/><span>{label}</span>{to==='/staff'&&<span className="online" title="People online now">{online}</span>}</NavLink>)}</div>)}
+        <nav aria-label="Workspace">
+          <div className="nav-group">{primaryItems.map(navLink)}</div>
+          <details className="nav-more" open={moreItems.some(([to])=>to===pathname)||undefined}>
+            <summary>More tools</summary>
+            {[...new Set(moreItems.map(n=>n[3]))].map(group=><div className="nav-group" key={group}><p className="nav-heading">{group}</p>{moreItems.filter(n=>n[3]===group).map(navLink)}</div>)}
+          </details>
         </nav>
         <div className="who"><div className="profile"><span className="avatar">{initials}</span><div><strong>{user.name}</strong><small>{user.role}</small></div><button className="icon-button" onClick={logout} aria-label="Log out" title="Log out"><Icon name="logout"/></button></div>{st.phone&&<small className="business-phone">{st.phone}</small>}</div>
       </aside>

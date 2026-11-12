@@ -13,15 +13,15 @@ const contactKey = c => validNic(c.nic) ? `${c.nic.toUpperCase()}:${validPhone(c
 const complete = c => !!c?.name?.trim() && !c.detailsPending && validNic(c.nic) && validPhone(c.phone);
 const Required = () => <span aria-hidden="true" className="required-mark"> *</span>;
 
-export default function NewOrderDialog({ me, onClose, onSaved }) {
+export default function NewOrderDialog({ me, onClose, onSaved, draft }) {
   const canWriteCustomers = can(me, 'customers.write');
   const [customer, setCustomer] = useState(emptyCustomer);
   const [lookup, setLookup] = useState(null);
   const [lookupAttempt, setLookupAttempt] = useState(0);
   const [confirmDifferent, setConfirmDifferent] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
-  const [start, setStart] = useState(''), [end, setEnd] = useState('');
-  const [lines, setLines] = useState(() => [newLine()]);
+  const [start, setStart] = useState(draft?.start??''), [end, setEnd] = useState(draft?.end??'');
+  const [lines, setLines] = useState(() => [{...newLine(),...draft?.item}]);
   const [availability, setAvailability] = useState(null);
   const [advance, setAdvance] = useState(''), [advanceMethod, setAdvanceMethod] = useState('');
   const [requestId] = useState(() => crypto.randomUUID());
@@ -90,32 +90,7 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
   return <>
     <div className="modal" onClick={close}>
       <form className="new-order-form" aria-labelledby="new-order-title" onClick={e => e.stopPropagation()} onSubmit={save}>
-        <header><h2 id="new-order-title">New order</h2><p>Enter the customer details and choose what they’re renting.</p></header>
-        <fieldset className="new-order-section" disabled={saving}>
-          <legend>Customer details</legend>
-          <div className="new-order-grid">
-            <label><span>NIC<Required/></span><NicInput required value={customer.nic} onChange={v => setField('nic', v)} /></label>
-            <label><span>Full name<Required/></span><input required readOnly={!!existing} autoComplete="name" value={contact.name} onChange={e => setField('name', e.target.value)} /></label>
-            <label><span>Phone number<Required/></span><PhoneInput required readOnly={!!existing} value={contact.phone} onChange={v => setField('phone', v)} /></label>
-            <label>Email address (optional)<input readOnly={!!existing} type="email" autoComplete="email" value={contact.email || ''} onChange={e => setField('email', e.target.value)} /></label>
-            <label className="new-order-wide">Address (optional)<textarea rows={2} readOnly={!!existing} autoComplete="street-address" value={contact.address || ''} onChange={e => setField('address', e.target.value)} /></label>
-          </div>
-          {lookupKey && !lookupResult && <p role="status">Checking customer NIC…</p>}
-          {lookupResult?.failed && <div className="notice"><p className="bad" role="alert">Could not check the customer.</p><button type="button" onClick={() => { setLookup(null); setLookupAttempt(n => n + 1); }}>Try again</button></div>}
-          {existing && <>
-            <p role="status">Existing customer found. Their saved details are filled in.</p>
-            {!complete(existing) && <p>Complete their required details before booking.{!canWriteCustomers && ' Ask someone with customer editing access to update their profile.'}</p>}
-            {canWriteCustomers && <button type="button" onClick={() => setEditingCustomer(existing)}>{complete(existing) ? 'Edit customer details' : 'Complete customer details'}</button>}
-          </>}
-          {!existing && !!lookupResult?.matches && !canWriteCustomers && <p role="status">No customer found with this NIC. Ask someone with customer editing access to add them.</p>}
-          {!existing && canWriteCustomers && incompleteMatches.length > 0 && <div className="notice">
-            <p>This phone number matches a profile without an NIC. If it is the same person, complete their profile.</p>
-            {incompleteMatches.map(c => <p key={c._id}><button type="button" onClick={() => setEditingCustomer({ ...c, nic: customer.nic })}>Complete details for {c.name}</button></p>)}
-            <label className="check"><input type="checkbox" checked={confirmDifferent} onChange={e => setConfirmDifferent(e.target.checked)} /> This is a different person</label>
-          </div>}
-          {!existing && canWriteCustomers && customerReady && <p role="status">New customer. Their details will be saved when you create the order.</p>}
-        </fieldset>
-
+        <header><h2 id="new-order-title">New order</h2></header>
         <fieldset className="new-order-section" disabled={saving}>
           <legend>Order details</legend>
           <div className="new-order-grid">
@@ -142,12 +117,42 @@ export default function NewOrderDialog({ me, onClose, onSaved }) {
         </fieldset>
 
         <fieldset className="new-order-section" disabled={saving}>
+          <legend>Customer details</legend>
+          <div className="new-order-grid">
+            <label><span>NIC<Required/></span><NicInput required value={customer.nic} onChange={v => setField('nic', v)} /></label>
+            <label><span>Full name<Required/></span><input required readOnly={!!existing} autoComplete="name" value={contact.name} onChange={e => setField('name', e.target.value)} /></label>
+            <label><span>Phone number<Required/></span><PhoneInput required readOnly={!!existing} value={contact.phone} onChange={v => setField('phone', v)} /></label>
+          </div>
+          <details className="desk-actions" onInvalid={e=>{e.currentTarget.open=true;}}>
+            <summary>Email and address (optional)</summary>
+            <div className="new-order-grid">
+            <label>Email address (optional)<input readOnly={!!existing} type="email" autoComplete="email" value={contact.email || ''} onChange={e => setField('email', e.target.value)} /></label>
+            <label className="new-order-wide">Address (optional)<textarea rows={2} readOnly={!!existing} autoComplete="street-address" value={contact.address || ''} onChange={e => setField('address', e.target.value)} /></label>
+            </div>
+          </details>
+          {lookupKey && !lookupResult && <p role="status">Checking customer NIC…</p>}
+          {lookupResult?.failed && <div className="notice"><p className="bad" role="alert">Could not check the customer.</p><button type="button" onClick={() => { setLookup(null); setLookupAttempt(n => n + 1); }}>Try again</button></div>}
+          {existing && <>
+            <p role="status">Existing customer found. Their saved details are filled in.</p>
+            {!complete(existing) && <p>Complete their required details before booking.{!canWriteCustomers && ' Ask someone with customer editing access to update their profile.'}</p>}
+            {canWriteCustomers && <button type="button" onClick={() => setEditingCustomer(existing)}>{complete(existing) ? 'Edit customer details' : 'Complete customer details'}</button>}
+          </>}
+          {!existing && !!lookupResult?.matches && !canWriteCustomers && <p role="status">No customer found with this NIC. Ask someone with customer editing access to add them.</p>}
+          {!existing && canWriteCustomers && incompleteMatches.length > 0 && <div className="notice">
+            <p>This phone number matches a profile without an NIC. If it is the same person, complete their profile.</p>
+            {incompleteMatches.map(c => <p key={c._id}><button type="button" onClick={() => setEditingCustomer({ ...c, nic: customer.nic })}>Complete details for {c.name}</button></p>)}
+            <label className="check"><input type="checkbox" checked={confirmDifferent} onChange={e => setConfirmDifferent(e.target.checked)} /> This is a different person</label>
+          </div>}
+          {!existing && canWriteCustomers && customerReady && <p role="status">New customer. Their details will be saved when you create the order.</p>}
+        </fieldset>
+
+        <fieldset className="new-order-section" disabled={saving}>
           <legend>Rental advance<Required/></legend>
           <div className="new-order-grid">
             <label><span>Advance received (LKR)<Required/></span><input required type="number" min="0.01" max={itemsReady ? total : undefined} step="0.01" value={advance} onChange={e => setAdvance(e.target.value)} /></label>
             <label><span>Payment method<Required/></span><select required value={advanceMethod} onChange={e => setAdvanceMethod(e.target.value)}><option value="">Choose payment method</option><option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option><option value="card">Card</option><option value="other">Other</option></select></label>
           </div>
-          <p>Enter the rental advance already received. It must be within the rental total.</p>
+          {itemsReady&&<p>Balance after advance <strong>{lkr(Math.max(0,total-Number(advance)))}</strong></p>}
         </fieldset>
         {error && <p className="bad" role="alert">{error}</p>}
         <div className="row end"><button type="button" disabled={saving} onClick={close}>Cancel</button><button className="btn" disabled={saving || !itemsReady || !customerReady}>{saving ? 'Saving…' : 'Create order'}</button></div>

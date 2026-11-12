@@ -28,6 +28,11 @@ r.get('/pickup-preview/:order',requirePermission('rentals.write'),wrap(async(req
  const method=held?'nic':securityHeld>0?'money':order.securityMethod??null;
  res.json({securityMethod:method,nicHeld:held,securityHeld,depositAmount:order.depositAmount,balance:rentalBalanceDue(order.totalAmount,paid),items,checklist:handoverChecklist(items)});
 }));
+r.get('/active/:order',requirePermission('rentals.write'),wrap(async(req,res)=>{
+ const rental=await Rental.findOne({order:req.params.order,status:{$in:['out','overdue']}}).populate('order','orderNo').lean();
+ if(!rental)throw httpErr(404,'Active rental not found');
+ res.json({...rental,items:await remainingLines(rental.order._id)});
+}));
 r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
  let payment, deposit;
  const result=await mutate(req,'rental.start:'+req.body.order,async session=>{

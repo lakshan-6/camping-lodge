@@ -37,14 +37,16 @@ function receiveChecklist(outstanding,submitted,complete){
  return [...checklist.values()];
 }
 r.get('/',wrap(async(req,res)=>res.json(await Return.find().sort({returnedAt:-1}).limit(200).populate({path:'rental',populate:[{path:'customer',select:'name'},{path:'order',select:'orderNo status securityMethod nicHeldAt nicReturnedAt'}]}).lean())));
-r.get('/preview/:rental',wrap(async(req,res)=>{
- const rental=await Rental.findById(req.params.rental);if(!rental||rental.status==='returned')throw httpErr(404,'Rental not found');
+const returnPreview=findRental=>wrap(async(req,res)=>{
+ const rental=await findRental(req.params);if(!rental||rental.status==='returned')throw httpErr(404,'Rental not found');
  const order=await Order.findById(rental.order),lines=await remainingLines(order._id);
  const settings=await getSettings();
  const checklist=await outstandingChecklist(rental);
  const netPaid=await paidTotal(order._id);
- res.json({...lateFeeInfo(rental,lines,settings),balance:rentalBalanceDue(order.totalAmount,netPaid),paymentCredit:rentalBalanceDue(netPaid,order.totalAmount),items:lines,checklist,securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
-}));
+ res.json({...lateFeeInfo(rental,lines,settings),rentalId:rental._id,balance:rentalBalanceDue(order.totalAmount,netPaid),paymentCredit:rentalBalanceDue(netPaid,order.totalAmount),items:lines,checklist,securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
+});
+r.get('/preview/:rental',returnPreview(({rental})=>Rental.findById(rental)));
+r.get('/preview/order/:order',requirePermission('returns.write'),returnPreview(({order})=>Rental.findOne({order,status:{$in:['out','overdue']}})));
 r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  let orderId;
  const payments=[];

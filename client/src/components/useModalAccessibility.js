@@ -6,7 +6,7 @@ export default function useModalAccessibility(){
   let active=null,previous=null,frame=null,overflow=null;
   const inertStates=new Map();
   const restore=()=>{for(const [element,inert]of inertStates)element.inert=inert;inertStates.clear();};
-  const controls=()=>[...(active?.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex="0"]')||[])].filter(e=>e.getClientRects().length&&!e.closest('[inert]'));
+  const controls=()=>[...(active?.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex="0"]')||[])].filter(e=>e.getClientRects().length&&!e.closest('[inert]'));
   const sync=()=>{
    const next=[...document.querySelectorAll('.modal')].at(-1)||null;
    if(next===active)return;

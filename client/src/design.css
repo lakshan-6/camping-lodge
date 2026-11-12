@@ -2268,6 +2268,14 @@ td[data-actions] {
 .equipment-return-details > summary { cursor: pointer; font-weight: 700; }
 .equipment-return-details > summary small { display: block; margin: 6px 0 0 1em; font-weight: 400; color: var(--mute); }
 .equipment-return-details[open] .return-checklist-group { margin-top: 12px; }
+.desk-actions > summary, .nav-more > summary { cursor: pointer; font-weight: 650; }
+.desk-actions { margin-block: 8px; }
+.desk-actions[open] > summary { margin-bottom: 10px; }
+.desk-actions > .bar { margin-block: 0; }
+.nav-more { margin-top: 14px; }
+.nav-more > summary { padding: 10px 12px; }
+.nav-more > .nav-group { margin-top: 12px; }
+.quote-card { margin-top: 18px; }
 
 /* The new booking form follows the order of the conversation at the rental desk. */
 .modal form.new-order-form { max-width: 670px; }

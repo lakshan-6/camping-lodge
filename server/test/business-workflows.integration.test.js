@@ -80,12 +80,16 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal((await request('/orders','POST',{...body,items:[{equipment:equipment._id,quantity:1.5}],requestId:crypto.randomUUID()})).status,400);
  });
  await t.test('pickup saves only selected accessories and concurrent pickup creates one rental and payment',async()=>{
+  assert.equal((await request('/rentals/active/'+order._id)).status,404);
+  assert.equal((await request('/returns/preview/order/'+order._id)).status,404);
   const body={order:order._id,payBalance:true,method:'cash',sendVia:'none',securityMethod:'money',securityDeposit:{received:true,amount:1000,method:'cash'},requestId:crypto.randomUUID()};
   const preview=await ok('/rentals/pickup-preview/'+order._id);
   assert.deepEqual(preview.checklist.map(item=>item.label),['Tent: Poles','Tent: Bag','Tent: Mat']);
   body.checklist=preview.checklist.map(item=>({...item,checked:item.label!=='Tent: Mat'}));
   const results=await Promise.all([request('/rentals/start','POST',body),request('/rentals/start','POST',body)]);assert.deepEqual(results.map(x=>x.status),[201,201]);rental=results[0].data;
   assert.deepEqual(rental.pickupChecklist.map(item=>item.label),['Tent: Poles','Tent: Bag']);
+  assert.equal((await ok('/rentals/active/'+order._id))._id,rental._id);
+  assert.equal((await ok('/returns/preview/order/'+order._id)).rentalId,rental._id);
   assert.equal(await M.Rental.countDocuments({order:order._id}),1);assert.equal(await M.Payment.countDocuments({order:order._id}),2);
   assert.equal((await request('/rentals/start','POST',{...body,requestId:crypto.randomUUID()})).status,409);
  });
@@ -122,6 +126,7 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   const settled={...final,paid:{damage:true},damagePaymentAmount:250,method:'cash'};
   await ok('/returns','POST',settled);assert.equal((await M.Rental.findById(rental._id)).status,'returned');assert.equal((await M.Equipment.findById(equipment._id)).damagedQty,1);assert.equal((await M.Order.findById(order._id)).totalAmount,6375.50);
   assert.equal((await M.Invoice.findOne({order:order._id})).status,'paid');
+  assert.equal((await request('/returns/preview/order/'+order._id)).status,404);
   assert.equal((await request('/returns','POST',{...final,requestId:crypto.randomUUID()})).status,409);
  });
  await t.test('repair completion is idempotent, releases stock and records its expense once',async()=>{
