@@ -4,10 +4,10 @@ import { httpErr } from '../utils/availability.js';
 import { getSettings } from './settings.js';
 import { mutate,audit,money,units,PAYMENT_METHODS } from '../utils/operations.js';
 import { requirePermission,assertPermission } from '../utils/permissions.js';
-import { paidTotal,rentalBalanceDue,remainingLines,recordPayment,syncInvoice } from '../utils/finance.js';
+import { paidTotal,rentalBalanceDue,remainingLines,recordPayment,syncInvoice,depositHeld,recordSecurityDeposit,closeSettledOrder } from '../utils/finance.js';
 import {returnUnitRows,receiveUnits,assertUnitTotals} from '../utils/equipmentUnits.js';
 import {nicHeld,releaseNic} from '../utils/securityDeposit.js';
-import { sendReturnUpdate } from '../utils/bookingEmail.js';
+import { sendReturnUpdate,sendSettlementUpdate } from '../utils/bookingEmail.js';
 import { lateFeeInfo } from '../utils/lateFees.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const checklistId=entry=>entry.key??entry.label;
@@ -43,7 +43,7 @@ const returnPreview=findRental=>wrap(async(req,res)=>{
  const settings=await getSettings();
  const checklist=await outstandingChecklist(rental);
  const netPaid=await paidTotal(order._id);
- res.json({...lateFeeInfo(rental,lines,settings),rentalId:rental._id,balance:rentalBalanceDue(order.totalAmount,netPaid),paymentCredit:rentalBalanceDue(netPaid,order.totalAmount),items:lines,checklist,securityMethod:order.securityMethod,nicHeld:nicHeld(order)});
+ res.json({...lateFeeInfo(rental,lines,settings),rentalId:rental._id,balance:rentalBalanceDue(order.totalAmount,netPaid),paymentCredit:rentalBalanceDue(netPaid,order.totalAmount),items:lines,checklist,securityMethod:order.securityMethod,nicHeld:nicHeld(order),depositHeld:await depositHeld(order._id)});
 });
 r.get('/preview/:rental',returnPreview(({rental})=>Rental.findById(rental)));
 r.get('/preview/order/:order',requirePermission('returns.write'),returnPreview(({order})=>Rental.findOne({order,status:{$in:['out','overdue']}})));
@@ -86,7 +86,7 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
   if(paid[flag]===true&&quoted!==undefined&&money(quoted,reference,true)!==amount)
    throw httpErr(409,'The amount due has changed. Reopen the return to see the latest amounts.');
  }
- if(complete&&amounts.some(([flag,amount])=>amount>0&&paid[flag]!==true))
+ if(complete&&req.body.deferSettlement!==true&&amounts.some(([flag,amount])=>amount>0&&paid[flag]!==true))
   throw httpErr(409,'Record the full outstanding balance and any return fees before completing the return.');
  const toRecord=amounts.filter(([flag,amount])=>amount>0&&paid[flag]===true);
  if(toRecord.length){
@@ -95,7 +95,7 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  }
  const returnNic=req.body.returnNic===true;
  if(returnNic&&!complete)throw httpErr(409,'Return all equipment before releasing the NIC');
- if(complete&&nicHeld(order)&&!returnNic)
+ if(complete&&req.body.deferSettlement!==true&&nicHeld(order)&&!returnNic)
   throw httpErr(409,'Confirm the customer’s NIC was physically returned before completing the return.');
  const [ret]=await Return.create([{rental:rental._id,returnedAt,lateFee,damageFee,partial:!complete,waivedFee:waived,waiverReason:req.body.waiverReason,notes:req.body.notes,checklist}],{session});
  for(const {line,ok,dmg,lost,n,unitRows} of rows){if(!n)continue;
@@ -110,12 +110,53 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  rental.lateFeePercentCharged=late.chargedPercent;if(complete)rental.status='returned';await rental.save({session});
  order.totalAmount=totalAfter;
  for(const [,amount,type,reference] of toRecord)payments.push(await recordPayment(order,{amount,type,method:req.body.method,reference},req.user,session));
- if(complete)order.status='completed';
+ if(complete)order.status='settlement_pending';
  if(returnNic)await releaseNic(order,req.user,session);
+ if(complete)await closeSettledOrder(order,session);
  await order.save({session});
  await syncInvoice(order,session);await audit(session,req.user,complete?'rental.returned':'rental.partial_return',order._id,null,{return:ret._id,lateFee,damageFee,waived,items:rows.map(r=>({equipment:r.line.equipment._id,returned:r.ok,damaged:r.dmg,lost:r.lost}))});
- return {...ret.toObject(),emailNote:complete?'Return saved. Order completed and balance settled.':'Partial return saved. Remaining equipment is still out.'};
+ return {...ret.toObject(),orderStatus:order.status,emailNote:complete
+  ?order.status==='completed'?'Return saved. Order completed and balance settled.':'Equipment received. Settlement is pending.'
+  :'Partial return saved. Remaining equipment is still out.'};
  });
  res.status(201).json({...result,notificationEmail:result._replayed?'already_processed':await sendReturnUpdate(orderId,result,payments)});
+}));
+async function pendingOrder(id,session){
+ const order=await Order.findById(id).session(session);
+ if(!order||order.deletedAt||order.status!=='settlement_pending')throw httpErr(409,'This order has no pending settlement');
+ return order;
+}
+r.get('/settlement/:order',requirePermission('returns.write'),wrap(async(req,res)=>{
+ const order=await pendingOrder(req.params.order);
+ res.json({orderNo:order.orderNo,balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),depositHeld:await depositHeld(order._id),nicHeld:nicHeld(order)});
+}));
+r.post('/settlement/:order',requirePermission('returns.write'),wrap(async(req,res)=>{
+ let payment;
+ const deposits=[];
+ const result=await mutate(req,'return.settle:'+req.params.order,async session=>{
+  payment=undefined;deposits.length=0;
+  const order=await pendingOrder(req.params.order,session);
+  const body=req.body;
+  const balance=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
+  const held=await depositHeld(order._id,session);
+  const apply=money(body.applyDeposit??0,'Deposit to apply',true);
+  const refund=money(body.refundDeposit??0,'Deposit refund',true);
+  if(apply>balance||Math.round((apply+refund)*100)>Math.round(held*100))throw httpErr(409,'Deposit or balance changed. Reopen the settlement.');
+  const remaining=rentalBalanceDue(balance,apply);
+  const received=money(body.paymentAmount??0,'Settlement payment',true);
+  if(received>0&&(received!==remaining||!PAYMENT_METHODS.includes(body.paymentMethod)))throw httpErr(409,'Confirm the remaining balance and choose the payment method.');
+  if(refund>0&&!PAYMENT_METHODS.includes(body.refundMethod))throw httpErr(400,'Choose how the deposit was refunded.');
+  if(apply)deposits.push(await recordSecurityDeposit(order,{type:'apply',amount:apply,method:'other',reason:'Applied at return settlement'},req.user,session));
+  if(received)payment=await recordPayment(order,{type:'balance',amount:received,method:body.paymentMethod,reference:'Return settlement'},req.user,session);
+  if(refund)deposits.push(await recordSecurityDeposit(order,{type:'refund',amount:refund,method:body.refundMethod,reason:'Refunded at return settlement'},req.user,session));
+  if(body.returnNic===true)await releaseNic(order,req.user,session);
+  await closeSettledOrder(order,session);
+  if(order.status!=='completed'&&!apply&&!refund&&!received&&body.returnNic!==true)throw httpErr(400,'Choose a payment, deposit or NIC action.');
+  await order.save({session});
+  await audit(session,req.user,'rental.settlement_updated',order._id,null,{status:order.status,apply,refund,received,nicReturned:body.returnNic===true});
+  return {orderStatus:order.status};
+ });
+ const notificationEmail=result._replayed?'already_processed':payment||deposits.length?await sendSettlementUpdate(req.params.order,payment,deposits):null;
+ res.json({...result,notificationEmail});
 }));
 export default r;

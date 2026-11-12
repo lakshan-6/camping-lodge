@@ -43,12 +43,7 @@ r.post('/',requirePermission('inventory.manage'),wrap(async(req,res)=>res.status
 }))));
 r.put('/:id',requirePermission('inventory.manage'),wrap(async(req,res)=>res.json(await mutate(req,'equipment.edit:'+req.params.id,async session=>{
  const item=await Equipment.findById(req.params.id).session(session);if(!item)throw httpErr(404,'Item not found');const before=item.toObject(),data=parse(req.body,before);
- const bookings=await Order.find({status:{$in:['reserved','active']}}).select('_id startDate endDate status').session(session);
- const lines=await OrderItem.find({equipment:item._id,order:{$in:bookings.map(o=>o._id)}}).session(session);
- const events=[];for(const line of lines){const order=bookings.find(o=>String(o._id)===String(line.order)),q=line.quantity-(line.returnedQuantity||0);events.push([order.status==='active'?0:+order.startDate,q],[order.status==='active'?Infinity:+order.endDate,-q]);}
- events.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);let current=0,max=0;for(const [,n]of events){current+=n;max=Math.max(max,current);}
- if(data.totalQuantity-data.damagedQty<max)throw httpErr(409,'Stock reduction would leave existing bookings without enough equipment');
- const open=await Repair.find({equipment:item._id,status:'open'}).session(session);if(data.damagedQty<open.reduce((s,x)=>s+x.quantity,0))throw httpErr(409,'Complete open repair jobs before reducing damaged stock');
+ checkStock(await stockSnapshot(item._id,session),data.totalQuantity,data.damagedQty);
  await assertUnitTotals(item,session);await allocateSku(data,session);item.set(data);await configureUnits(item,req.body,before,session);item.revision++;await item.save({session});if(item.totalQuantity!==before.totalQuantity)await InventoryTransaction.create([{equipment:item._id,type:'adjustment',quantity:item.totalQuantity-before.totalQuantity,note:'Inventory edit'}],{session});await audit(session,req.user,'equipment.edited',item._id,before,item);return item;
 }))));
 r.delete('/:id',requirePermission('inventory.manage'),wrap(async(req,res)=>res.json(await mutate(req,'equipment.archive:'+req.params.id,async session=>{

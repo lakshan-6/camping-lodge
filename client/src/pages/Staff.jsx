@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import {permissionLabels} from '../permissions.js';
 
 const blank = { name: '', username: '', password: '', role: 'staff' };
+const rentalDeskPermissions = ['orders.write', 'customers.write', 'rentals.write', 'returns.write', 'payments.record'];
 
 export default function Staff({ me }) {
   const [list, setList] = useState([]);
@@ -25,6 +26,17 @@ export default function Staff({ me }) {
     e.preventDefault(); setErr('');
     try { await api('/users', { method: 'POST', body: form }); setForm(null); load(); } catch (x) { setErr(x.message); }
   }
+  async function savePermissions(e) {
+    e.preventDefault();
+    setErr('');
+    try {
+      await api('/users/' + permissions.user._id, { method: 'PATCH', body: { permissions: permissions.selected } });
+      setPermissions(null);
+      load();
+    } catch (x) {
+      setErr(x.message);
+    }
+  }
   return (
     <>
       <div className="bar"><button className="btn" onClick={() => { setErr(''); setForm(blank); }}>Add user</button></div>
@@ -36,7 +48,7 @@ export default function Staff({ me }) {
               {u.role!=='owner'&&(u._id === me.id || canManage(u)) && <button onClick={() => { const p = prompt('New password for ' + u.username + ' (12–128 characters)'); if (p) patch(u, { password: p }); }}>Reset password</button>}
               {canManage(u) && <button onClick={() => patch(u, { active: !u.active })}>{u.active ? 'Disable' : 'Enable'}</button>}
               {canManage(u) && <button onClick={() => del(u)}>Delete</button>}
-              {isOwner&&u.role==='staff'&&<button onClick={()=>setPermissions({user:u,selected:u.permissions||[]})}>Permissions</button>}
+              {isOwner&&u.role==='staff'&&<button onClick={()=>{setErr('');setPermissions({user:u,selected:u.permissions||[]});}}>Permissions</button>}
             </td></tr>))}</tbody></ResponsiveTable></div>
       {form && (
         <div className="modal" onClick={() => setForm(null)}>
@@ -50,7 +62,20 @@ export default function Staff({ me }) {
             <div className="row end"><button type="button" onClick={() => setForm(null)}>Cancel</button><button className="btn">Add user</button></div>
           </form>
         </div>)}
-      {permissions&&<div className="modal"><form onSubmit={async e=>{e.preventDefault();try{await api('/users/'+permissions.user._id,{method:'PATCH',body:{permissions:permissions.selected}});setPermissions(null);load();}catch(x){setErr(x.message);}}}><h2>Permissions: {permissions.user.name}</h2><p>Choose exactly what this staff account can do. Owner-only backup, restore and permanent deletion stay unavailable.</p>{Object.entries(permissionLabels).map(([key,label])=><label className="check" key={key}><input type="checkbox" checked={permissions.selected.includes(key)} onChange={e=>setPermissions({...permissions,selected:e.target.checked?[...permissions.selected,key]:permissions.selected.filter(p=>p!==key)})}/>{label}</label>)}{err&&<p className="bad">{err}</p>}<div className="bar"><button type="button" onClick={()=>setPermissions(null)}>Cancel</button><button className="btn">Save permissions</button></div></form></div>}
+      {permissions&&<div className="modal">
+        <form onSubmit={savePermissions}>
+          <h2>Permissions for {permissions.user.name}</h2>
+          <button type="button" onClick={()=>setPermissions({...permissions,selected:rentalDeskPermissions})}>Select rental desk permissions</button>
+          <p className="hint">Selects bookings, customers, handover, returns and payment recording. Review the selection before saving.</p>
+          {Object.entries(permissionLabels).map(([key,label])=><label className="check" key={key}>
+            <input type="checkbox" checked={permissions.selected.includes(key)} onChange={e=>setPermissions({
+              ...permissions, selected:e.target.checked?[...permissions.selected,key]:permissions.selected.filter(p=>p!==key)
+            })}/>{label}
+          </label>)}
+          {err&&<p className="bad" role="alert">{err}</p>}
+          <div className="bar"><button type="button" onClick={()=>setPermissions(null)}>Cancel</button><button className="btn">Save permissions</button></div>
+        </form>
+      </div>}
     </>
   );
 }

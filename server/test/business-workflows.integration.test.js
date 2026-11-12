@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import express from 'express';
 import {once} from 'node:events';
+import {inflateSync} from 'node:zlib';
 import * as M from '../models/index.js';
 import {requireAuth,sign,hashPassword} from '../utils/auth.js';
 import {initializeDocumentNumbers} from '../utils/documentNumbers.js';
@@ -17,12 +18,14 @@ import availabilityRoutes from '../routes/availability.js';
 import rentalRoutes from '../routes/rentals.js';
 import returnRoutes from '../routes/returns.js';
 import paymentRoutes from '../routes/payments.js';
+import invoiceRoutes from '../routes/invoices.js';
 import reports from '../routes/reports.js';
 import stats from '../routes/stats.js';
 import manage from '../routes/management.js';
 import backups from '../routes/backups.js';
 import users from '../routes/users.js';
 import {createBackup,backupEnvelope,decryptSnapshot} from '../utils/backups.js';
+import {emailInvoice,invoicePdfBuffer} from '../utils/invoiceMail.js';
 process.env.AUTH_SECRET=crypto.randomBytes(32).toString('hex');process.env.PAST_ORDER_DELETE_KEY='WorkflowKey123@@';process.env.BACKUP_ENCRYPTION_KEY=crypto.randomBytes(32).toString('hex');
 test('late fee increases every two completed hours and caps at one period after twelve hours',()=>{
  const dueDate=new Date('2026-11-11T04:30:00Z'),lines=[{remaining:1,periodRate:1000}];
@@ -44,7 +47,7 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
  const staff=await M.User.create({name:'Staff',username:'staff',passwordHash,role:'staff',lastSeenAt:new Date()});
  let ownerToken=sign(owner),staffToken=sign(staff);
  const app=express();app.use(express.json({limit:'16mb'}));app.use(requireAuth);
- for(const [path,router]of Object.entries({customers:customerRoutes,equipment:equipmentRoutes,orders:orderRoutes,availability:availabilityRoutes,rentals:rentalRoutes,returns:returnRoutes,payments:paymentRoutes,settings:settingsRoutes,reports,stats,manage,backups,users}))app.use('/'+path,router);
+ for(const [path,router]of Object.entries({customers:customerRoutes,equipment:equipmentRoutes,orders:orderRoutes,availability:availabilityRoutes,rentals:rentalRoutes,returns:returnRoutes,payments:paymentRoutes,invoices:invoiceRoutes,settings:settingsRoutes,reports,stats,manage,backups,users}))app.use('/'+path,router);
  app.use((e,req,res,next)=>res.status(e.status||(e.name==='ValidationError'?400:500)).json({error:e.message}));
  const server=app.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(r=>server.close(r)));const base=`http://127.0.0.1:${server.address().port}`;
  const request=async(path,method='GET',body,token=ownerToken)=>{const response=await fetch(base+path,{method,headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},...(body?{body:JSON.stringify(body)}:{})});const text=await response.text();let data;try{data=JSON.parse(text);}catch{data=text;}return {status:response.status,data};};
@@ -78,6 +81,13 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal((await request('/orders','POST',{...body,advance:{amount:100000,method:'cash',allowOverpayment:true,reason:'Test'},requestId:crypto.randomUUID()})).status,409);
   assert.equal(await M.Order.countDocuments(),1);assert.equal(await M.Payment.countDocuments(),1);
   assert.equal((await request('/orders','POST',{...body,items:[{equipment:equipment._id,quantity:1.5}],requestId:crypto.randomUUID()})).status,400);
+ });
+ await t.test('rental desk can see pickup balances while finance-wide views are protected',async()=>{
+  for(const path of ['/payments/balances','/payments','/invoices']){
+   assert.equal((await request(path,'GET',undefined,staffToken)).status,403);
+  }
+  const bookings=await ok('/orders?status=reserved&pickupBalances=true','GET',undefined,staffToken);
+  assert.equal(bookings.find(row=>row._id===order._id).balance,5000);
  });
  await t.test('pickup saves only selected accessories and concurrent pickup creates one rental and payment',async()=>{
   assert.equal((await request('/rentals/active/'+order._id)).status,404);
@@ -391,6 +401,105 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   assert.equal((await M.Payment.findOne({order:prepaid._id,type:'fee'})).amount,0.15);
   assert.equal((await M.Invoice.findOne({order:prepaid._id})).status,'paid');
  });
+ await t.test('booking availability uses peak overlap and holds each 36-hour period',async()=>{
+  const gear=await ok('/equipment','POST',{name:'Availability test tent',category:'Camping',totalQuantity:2,periodRate:1000});
+  const base=Date.now()+7*24*3600000;
+  const time=hours=>new Date(base+hours*3600000).toISOString();
+  const booking=(start,end,quantity)=>({customer:customer._id,startDate:time(start),endDate:time(end),items:[{equipment:gear._id,quantity}],advance});
+  await ok('/orders','POST',booking(0,24,1));
+  assert.equal((await request('/orders','POST',booking(30,31,2))).status,409);
+  await ok('/orders','POST',booking(36,60,1));
+  const availability=await ok('/availability?'+new URLSearchParams({start:time(0),end:time(72)}));
+  const item=availability.items.find(row=>row._id===gear._id);
+  assert.equal(item.booked,1);
+  assert.equal(item.available,1);
+  await ok('/orders','POST',booking(0,72,1));
+  assert.equal((await request('/orders','POST',booking(0,72,1))).status,409);
+ });
+ await t.test('rescheduling keeps booked rates and prices added items at their current rate',async()=>{
+  const first=await ok('/equipment','POST',{name:'Locked-rate tent',category:'Camping',totalQuantity:2,periodRate:1000});
+  const added=await ok('/equipment','POST',{name:'New-line lantern',category:'Camping',totalQuantity:2,periodRate:250});
+  const original=await ok('/orders','POST',{customer:customer._id,...dates(),items:[{equipment:first._id,quantity:1}],advance});
+  await ok('/equipment/'+first._id,'PUT',{...first,periodRate:1500});
+  const start=Date.now()+6*24*3600000;
+  const change={startDate:new Date(start).toISOString(),endDate:new Date(start+40*3600000).toISOString(),
+   items:[{equipment:first._id,quantity:1},{equipment:added._id,quantity:1}]};
+  assert.equal((await request('/orders/'+original._id,'PUT',{...change,confirmedTotal:3500})).status,409);
+  const updated=await ok('/orders/'+original._id,'PUT',{...change,confirmedTotal:2500});
+  assert.equal(updated.totalAmount,2500);
+  const detail=await ok('/orders/'+original._id+'/detail');
+  assert.equal(detail.items.find(i=>i.equipment._id===first._id).periodRate,1000);
+  assert.equal(detail.items.find(i=>i.equipment._id===added._id).periodRate,250);
+ });
+ await t.test('physically returned stock is available while money settlement remains pending',async()=>{
+  const gear=await ok('/equipment','POST',{name:'Settlement test tent',category:'Camping',totalQuantity:1,periodRate:1000});
+  const booking=await ok('/orders','POST',{customer:customer._id,...dates(),items:[{equipment:gear._id,quantity:1}],advance:{amount:100,method:'cash'}});
+  const handover=await ok('/rentals/start','POST',{order:booking._id,securityMethod:'money',
+   securityDeposit:{received:true,amount:1200,method:'cash'},rentalPayment:{amount:0}});
+  const returned=await ok('/returns','POST',{rental:handover._id,items:[{equipment:gear._id,quantityReturned:1}],deferSettlement:true});
+  assert.equal(returned.orderStatus,'settlement_pending');
+  assert.equal((await M.Rental.findById(handover._id)).status,'returned');
+  const availability=await ok('/availability?'+new URLSearchParams({start:booking.startDate,end:booking.endDate}));
+  assert.equal(availability.items.find(row=>row._id===gear._id).available,1);
+  const endpoint='/returns/settlement/'+booking._id;
+  const preview=await ok(endpoint);
+  assert.equal(preview.balance,900);
+  assert.equal(preview.depositHeld,1200);
+  assert.equal((await request(endpoint,'POST',{applyDeposit:901,refundDeposit:299,refundMethod:'cash'})).status,409);
+  const settlement={applyDeposit:900,refundDeposit:300,refundMethod:'cash',requestId:crypto.randomUUID()};
+  assert.equal((await ok(endpoint,'POST',settlement)).orderStatus,'completed');
+  assert.equal((await ok(endpoint,'POST',settlement))._replayed,true);
+  assert.equal(await M.DepositTransaction.countDocuments({order:booking._id}),3);
+  assert.equal(await M.Payment.countDocuments({order:booking._id}),2);
+  assert.equal((await M.Invoice.findOne({order:booking._id})).status,'paid');
+  assert.equal((await ok('/payments/deposits/'+booking._id)).held,0);
+  const refund={order:booking._id,type:'refund',amount:100,method:'cash',reason:'Test correction'};
+  assert.equal((await request('/payments','POST',refund)).status,409);
+  await ok('/payments','POST',{...refund,refundCorrection:'reduce_charge'});
+  assert.equal((await M.Order.findById(booking._id)).totalAmount,900);
+  assert.equal((await M.Order.findById(booking._id)).status,'completed');
+  await ok('/payments','POST',{...refund,refundCorrection:'reopen'});
+  assert.equal((await ok(endpoint)).balance,100);
+  await ok('/payments','POST',{order:booking._id,type:'balance',amount:100,method:'cash'});
+  assert.equal((await M.Order.findById(booking._id)).status,'completed');
+  assert.equal((await request('/payments/deposits','POST',{order:booking._id,type:'collect',amount:50,method:'cash'})).status,409);
+ });
+ await t.test('tracked accessories use the selected equipment unit codes',async()=>{
+  const gear=await ok('/equipment','POST',{name:'Tracked checklist tent',category:'Camping',totalQuantity:2,periodRate:100,
+   trackUnits:true,checklist:['Carry bag']});
+  const booking=await ok('/orders','POST',{customer:customer._id,...dates(),items:[{equipment:gear._id,quantity:2}],advance});
+  const preview=await ok('/rentals/pickup-preview/'+booking._id);
+  const units=preview.items[0].availableUnits.slice().reverse();
+  assert.equal(preview.checklist.length,2);
+  const handover=await ok('/rentals/start','POST',{order:booking._id,securityMethod:'money',rentalPayment:{amount:0},
+   securityDeposit:{received:true,amount:50,method:'cash'},
+   unitSelections:[{equipment:gear._id,units:units.map(unit=>unit._id)}],
+   checklist:preview.checklist.map(item=>({...item,checked:true}))});
+  assert.deepEqual(handover.pickupChecklist.map(item=>item.label),
+   units.map(unit=>`Tracked checklist tent: Carry bag · ${unit.code}`));
+  const checked=(await ok('/returns/preview/'+handover._id)).checklist;
+  assert.deepEqual(checked.map(item=>item.label),handover.pickupChecklist.map(item=>item.label));
+  const returned=await ok('/returns','POST',{rental:handover._id,items:[{equipment:gear._id,units:units.map(unit=>({unit:unit._id,condition:'good'}))}],
+   checklist:[{...checked[0],checked:true},{...checked[1],checked:false,missing:true,fee:20}],deferSettlement:true});
+  assert.equal(returned.damageFee,20);
+  assert.equal(returned.checklist.find(item=>item.missing).label,checked[1].label);
+ });
+ await t.test('void invoice PDF omits balance instructions and customer NIC and cannot be emailed',async()=>{
+  const gear=await ok('/equipment','POST',{name:'Void invoice tent',category:'Camping',totalQuantity:1,periodRate:1000});
+  const booking=await ok('/orders','POST',{customer:customer._id,...dates(),items:[{equipment:gear._id,quantity:1}],advance});
+  const invoice=await ok('/invoices','POST',{order:booking._id});
+  assert.equal((await ok('/invoices/'+invoice._id+'/void','PATCH',{})).status,'void');
+  await assert.rejects(emailInvoice(invoice._id),{status:409});
+  const {buffer}=await invoicePdfBuffer(invoice._id);
+  const pages=[];
+  for(const [,stream] of buffer.toString('latin1').matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)){
+   try{pages.push(inflateSync(Buffer.from(stream,'latin1')).toString('latin1'));}catch{/* Other PDF streams are not deflate text. */}
+  }
+  const contents=pages.flatMap(page=>page.split('\n'))
+   .filter(line=>line.includes('TJ')).map(line=>[...line.matchAll(/<([\da-f]+)>/gi)].map(([,hex])=>Buffer.from(hex,'hex').toString('latin1')).join('')).join('\n');
+  assert.match(contents,/VOID INVOICE/);
+  assert.doesNotMatch(contents,/BALANCE DUE|NIC:/i);
+ });
  await t.test('booking confirmation sends only after save, skips duplicates, and never rolls back an order',async mailTest=>{
   const gear=await ok('/equipment','POST',{name:'<Tent & Lamp>',category:'Lighting',totalQuantity:5,periodRate:800,deposit:500});
   const contact=await M.Customer.create({name:'Pat <Example>',phone:'0776969696',nic:'200500112233',email:'recipient@example.test',address:'Private customer address'});
@@ -479,5 +588,16 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   const security=await ok('/payments/deposits','POST',{order:booking._id,type:'refund',amount:50,method:'cash',reason:'Security returned',requestId:crypto.randomUUID()});
   assert.equal(security.notificationEmail,'failed');assert.ok(await M.DepositTransaction.findById(security._id));
   assert.deepEqual(requests.map(r=>r.tags[0]),['booking-confirmation','payment-confirmation','payment-confirmation','pickup-confirmation','return-confirmation','return-confirmation','security-deposit-update']);
+  providerStatus=400;
+  const rejected=await ok('/orders','POST',{...body,startDate:'2031-11-12T03:30:00.000Z',endDate:'2031-11-13T03:30:00.000Z',requestId:crypto.randomUUID()});
+  assert.equal(rejected.bookingEmail,'rejected');
+  assert.equal((await ok('/orders/'+rejected._id+'/detail')).canRetryBookingEmail,true);
+  providerStatus=201;
+  const retryEndpoint='/orders/'+rejected._id+'/retry-booking-email';
+  assert.equal((await ok(retryEndpoint,'POST',{})).status,'accepted');
+  const detail=await ok('/orders/'+rejected._id+'/detail');
+  assert.equal(detail.canRetryBookingEmail,false);
+  assert.deepEqual(detail.emailHistory.map(({event,status})=>[event,status]),[['booking','accepted'],['booking','rejected']]);
+  assert.equal((await request(retryEndpoint,'POST',{})).status,429);
  });
 });

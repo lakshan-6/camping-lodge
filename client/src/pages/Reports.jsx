@@ -28,18 +28,18 @@ export default function Reports() {
       {err && <p className="bad">{err}</p>}
       {d && <>
         <div className="cards report-cards">
-          <Metric icon="wallet" label="Payments received" value={lkr(d.revenue)} tone="highlight"/>
-          <Metric icon="orders" label="Orders by pickup date" value={d.orders}/>
-          <Metric icon="report" label="Total billed" value={lkr(d.billed)}/>
+          <Metric icon="wallet" label="Net payments after refunds" value={lkr(d.revenue)} tone="highlight"/>
+          <Metric icon="orders" label="Bookings created" value={d.orders}/>
+          <Metric icon="report" label="Invoiced in this period" value={lkr(d.billed)}/>
           <Metric icon="receipt" label="Recorded expenses" value={lkr(d.expenses)}/>
           <Metric icon="chart" label="Receipts less expenses" value={lkr(d.netCashAfterExpenses)}/>
           <Metric icon="shield" label="Security deposits held" value={lkr(d.securityDepositsHeld)}/>
         </div>
-        <h3>Most rented equipment</h3>
-        {d.top.length === 0 ? <div className="empty"><p>No rentals in this period.</p></div> : (
-          <div className="tablewrap"><ResponsiveTable><thead><tr><th>Item</th><th>Orders</th><th>Units rented</th><th>Revenue</th></tr></thead>
-            <tbody>{d.top.map(t => <tr key={t.name}><td data-l="Item"><b>{t.name}</b></td><td data-l="Orders">{t.orders}</td><td data-l="Units rented">{t.units}</td><td data-l="Revenue">{lkr(t.revenue)}</td></tr>)}</tbody></ResponsiveTable></div>)}
-        <h3>Revenue by payment method</h3>
+        <h3>Equipment bookings and pickups</h3>
+        {d.top.length === 0 ? <div className="empty"><p>No equipment bookings or pickups in this period.</p></div> : (
+          <div className="tablewrap"><ResponsiveTable><thead><tr><th>Item</th><th>Booked units</th><th>Handed-out units</th></tr></thead>
+            <tbody>{d.top.map(t => <tr key={t._id}><td data-l="Item"><b>{t.name}</b></td><td data-l="Booked units">{t.bookedUnits}</td><td data-l="Handed-out units">{t.handedOutUnits}</td></tr>)}</tbody></ResponsiveTable></div>)}
+        <h3>Net payments by method</h3>
         {d.byMethod.length === 0 ? <div className="empty"><p>No payments in this period.</p></div> : (
           <div className="tablewrap"><ResponsiveTable><thead><tr><th>Method</th><th>Amount</th></tr></thead>
             <tbody>{d.byMethod.map(m => <tr key={m.method}><td data-l="Method">{m.method.replace('_', ' ')}</td><td data-l="Amount">{lkr(m.total)}</td></tr>)}</tbody></ResponsiveTable></div>)}

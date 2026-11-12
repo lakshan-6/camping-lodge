@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
-import { Order, OrderItem, Customer, Payment, Invoice } from '../models/index.js';
+import { Order, OrderItem, Customer, Payment, Invoice, AuditEvent } from '../models/index.js';
 import { httpErr } from '../utils/availability.js';
 import { nextDocumentNumber } from '../utils/documentNumbers.js';
 import { previewOrderDeletion, permanentlyDeleteOrder } from '../utils/orderDeletion.js';
 import { mutate, audit, money, PAYMENT_METHODS } from '../utils/operations.js';
 import { requirePermission, assertPermission, can } from '../utils/permissions.js';
-import { priceItems, paidTotal, recordPayment, syncInvoice, depositHeld } from '../utils/finance.js';
+import { priceItems, paidTotal, rentalBalanceDue, recordPayment, syncInvoice, depositHeld, closeSettledOrder } from '../utils/finance.js';
 import {dayRange} from '../utils/businessTime.js';
 import {securityMethod,chooseSecurity,receiveNic,releaseNic,nicHeld} from '../utils/securityDeposit.js';
 import {bookingContact,resolveBookingCustomer} from '../utils/customers.js';
@@ -15,10 +15,14 @@ import {sendBookingConfirmation,sendPaymentUpdate} from '../utils/bookingEmail.j
 const r=Router(), wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const ownerOnly=(req,res,next)=>req.user?.role==='owner'?next():next(httpErr(403,'Only the owner can delete past orders'));
 const limit=rateLimit({windowMs:15*60*1000,limit:5,keyGenerator:req=>String(req.user._id),standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many deletion attempts. Try again in 15 minutes.'}});
+const emailRetryLimit=rateLimit({windowMs:60*1000,limit:1,keyGenerator:req=>String(req.params.id),standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Wait one minute before trying again.'}});
+const emailActions=['email.booking','email.payment','email.deposit','email.pickup','email.return','email.settlement'];
+const retryableEmailStatus=['rejected','not_configured','no_email','invalid_email'];
 r.get('/',wrap(async(req,res)=>{
   const hidden=req.query.deleted==='true';if(hidden&&req.user.role!=='owner')throw httpErr(403,'Owner only');
   const filter=hidden?{deletedAt:{$ne:null},status:'completed'}:{deletedAt:null};
-  const status=req.query.status;if(status){if(!['reserved','active','completed','cancelled'].includes(status))throw httpErr(400,'Choose a valid status');if(hidden&&status!=='completed')throw httpErr(400,'Hidden past orders are completed orders');filter.status=status;}
+  const status=req.query.status;if(status){if(!['reserved','active','settlement_pending','completed','cancelled'].includes(status))throw httpErr(400,'Choose a valid status');if(hidden&&status!=='completed')throw httpErr(400,'Hidden past orders are completed orders');filter.status=status;}
+  const pickupBalances=status==='reserved'&&req.query.pickupBalances==='true'&&can(req.user,'rentals.write');
   if(req.query.from||req.query.to)filter.startDate=dayRange(req.query.from||req.query.to,req.query.to||req.query.from);
   const term=String(req.query.q||'').trim();if(term.length>80)throw httpErr(400,'Search must be 80 characters or fewer');
   if(term){const regex=new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i');const customers=await Customer.find({$or:[{name:regex},{phone:regex},{nic:regex}]}).select('_id').lean();filter.$or=[{orderNo:regex},{customer:{$in:customers.map(c=>c._id)}}];}
@@ -27,7 +31,10 @@ r.get('/',wrap(async(req,res)=>{
   let query=Order.find(filter).sort({createdAt:-1,_id:-1});if(paged)query=query.skip((page-1)*pageSize).limit(pageSize);
   const orders=await query.populate('customer','name phone nic address email detailsPending').lean();
   const items=await OrderItem.find({order:{$in:orders.map(o=>o._id)}}).populate('equipment','name checklist').lean();
-  const rows=orders.map(o=>({...o,items:items.filter(i=>String(i.order)===String(o._id))}));
+  const rows=await Promise.all(orders.map(async o=>{
+    const paid=pickupBalances?await paidTotal(o._id):null;
+    return {...o,items:items.filter(i=>String(i.order)===String(o._id)),...(pickupBalances?{paid,balance:rentalBalanceDue(o.totalAmount,paid)}:{})};
+  }));
   res.json(paged?{rows,total:await Order.countDocuments(filter),page,pageSize}:rows);
 }));
 r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
@@ -69,9 +76,13 @@ r.put('/:id',requirePermission('orders.write'),wrap(async(req,res)=>{
     if(!order||order.deletedAt)throw httpErr(404,'Order not found');
     if(order.status!=='reserved')throw httpErr(409,'Only uncollected bookings can be edited');
     const before=order.toObject();
+    const oldLines=await OrderItem.find({order:order._id}).select('equipment periodRate').session(session);
+    const rates=new Map(oldLines.map(line=>[String(line.equipment),line.periodRate]));
     const pickupDate=req.body.pickupDate===undefined?order.pickupDate:req.body.pickupDate;
     const plannedReturnDate=req.body.plannedReturnDate===undefined?order.plannedReturnDate:req.body.plannedReturnDate;
-    const p=await priceItems({pickupDate,plannedReturnDate,startDate:req.body.startDate||order.startDate,endDate:req.body.endDate||order.endDate,items:req.body.items},session,order._id);
+    const p=await priceItems({pickupDate,plannedReturnDate,startDate:req.body.startDate||order.startDate,endDate:req.body.endDate||order.endDate,items:req.body.items},session,order._id,rates);
+    if(req.body.confirmedTotal!==undefined&&money(req.body.confirmedTotal,'Confirmed total',true)!==p.total)
+      throw httpErr(409,'The booking price changed. Reopen the booking to review the new total.');
     await OrderItem.deleteMany({order:order._id},{session});await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
     const depositAmount=order.securityMethod==='money'?order.depositAmount??p.deposit:p.deposit;
     order.set({pickupDate:p.pickupDate,plannedReturnDate:p.plannedReturnDate,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount});await order.save({session});
@@ -109,14 +120,25 @@ r.post('/:id/security',wrap(async(req,res)=>{
    if(req.body.confirmed!==true)throw httpErr(400,'Confirm the NIC was physically received or returned');
    if(action==='receive'){await chooseSecurity(order,'nic',session);await receiveNic(order,req.user,session);}else await releaseNic(order,req.user,session);
   }
+  await closeSettledOrder(order,session);
   await order.save({session});return {ok:true,securityMethod:order.securityMethod,nicHeld:nicHeld(order),nicHeldAt:order.nicHeldAt,nicReturnedAt:order.nicReturnedAt};
  }));
+}));
+r.post('/:id/retry-booking-email',requirePermission('orders.write'),emailRetryLimit,wrap(async(req,res)=>{
+  const order=await Order.findById(req.params.id).select('status deletedAt').lean();
+  if(!order||order.deletedAt||order.status!=='reserved')throw httpErr(409,'Only an uncollected booking can retry its confirmation');
+  const last=await AuditEvent.findOne({target:String(order._id),action:'email.booking'}).sort({createdAt:-1,_id:-1}).lean();
+  if(!retryableEmailStatus.includes(last?.after?.status))throw httpErr(409,'Check Brevo Email Logs for the confirmation status.');
+  res.json({status:await sendBookingConfirmation(order._id)});
 }));
 r.get('/:id/detail',wrap(async(req,res)=>{
   const order=await Order.findById(req.params.id).populate('customer').lean();if(!order)throw httpErr(404,'Order not found');
   const items=await OrderItem.find({order:order._id}).populate('equipment','name').lean();
   const showPayments=['finance.view','payments.record','payments.refund'].some(p=>can(req.user,p));
-  res.json({...order,items,paid:await paidTotal(order._id),securityHeld:await depositHeld(order._id),payments:showPayments?await Payment.find({order:order._id}).sort({paidAt:-1}).lean():[],invoices:await Invoice.find({order:order._id}).lean()});
+  const emailHistory=(await AuditEvent.find({target:String(order._id),action:{$in:emailActions}}).sort({createdAt:-1,_id:-1}).limit(30).lean())
+    .map(({_id,action,after,createdAt})=>({_id,event:action.slice(6),status:after?.status,createdAt}));
+  const canRetryBookingEmail=order.status==='reserved'&&can(req.user,'orders.write')&&retryableEmailStatus.includes(emailHistory.find(row=>row.event==='booking')?.status);
+  res.json({...order,items,paid:await paidTotal(order._id),securityHeld:await depositHeld(order._id),payments:showPayments?await Payment.find({order:order._id}).sort({paidAt:-1}).lean():[],invoices:await Invoice.find({order:order._id}).lean(),emailHistory,canRetryBookingEmail});
 }));
 r.get('/:id/past-delete-preview',ownerOnly,wrap(async(req,res)=>res.json(await previewOrderDeletion(req.params.id))));
 r.delete('/:id/past',ownerOnly,limit,wrap(async(req,res)=>{

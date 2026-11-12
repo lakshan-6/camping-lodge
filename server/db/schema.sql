@@ -193,7 +193,7 @@ CREATE TABLE "orders" (
   "plannedReturnDate" text,
   "startDate" timestamptz NOT NULL,
   "endDate" timestamptz NOT NULL,
-  "status" text CHECK ("status" IN ('reserved','active','completed','cancelled')),
+  "status" text CHECK ("status" IN ('reserved','active','settlement_pending','completed','cancelled')),
   "totalAmount" numeric(16,2),
   "depositAmount" numeric(16,2),
   "securityMethod" text CHECK ("securityMethod" IN ('nic','money')),

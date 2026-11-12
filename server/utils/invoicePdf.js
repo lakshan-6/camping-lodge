@@ -12,7 +12,7 @@ export function invoicePdf({ st, inv, items, paid }) {
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
     const chunks = [];
     doc.on('data', c => chunks.push(c)); doc.on('end', () => resolve(Buffer.concat(chunks))); doc.on('error', reject);
-    const balance = Math.max(0, inv.total - paid), done = inv.total - paid <= 0;
+    const balance = Math.max(0, inv.total - paid), done = balance === 0, voided = inv.status === 'void';
     const green = '#173a2f';
     const planned = inv.order.pickupDate && ['reserved', 'cancelled'].includes(inv.order.status);
     const pickup = planned ? inv.order.pickupDate : when(inv.order.startDate);
@@ -26,12 +26,12 @@ export function invoicePdf({ st, inv, items, paid }) {
 
     doc.fillColor(green).font('Helvetica-Bold').fontSize(9).text('BILL TO', 40, 140).text('ORDER', 330, 140);
     doc.fillColor('#222').font('Helvetica').fontSize(10)
-      .text([inv.customer.name, inv.customer.phone, inv.customer.nic ? 'NIC: ' + inv.customer.nic : ''].filter(Boolean).join('\n'), 40, 154, { width: 270 })
+      .text([inv.customer.name, inv.customer.phone].filter(Boolean).join('\n'), 40, 154, { width: 270 })
       .text([inv.order.orderNo, 'Pickup: ' + pickup, 'Return: ' + returnTime].join('\n'), 330, 154, { width: 225 });
 
-    doc.roundedRect(40, 212, 515, 28, 6).fill(done ? '#2d7a4f' : '#d9922b');
-    doc.fillColor(done ? '#fff' : '#2a1b00').font('Helvetica-Bold').fontSize(11)
-      .text(done ? 'PAID IN FULL  -  PAYMENT COMPLETED' : 'BALANCE DUE: ' + lkr(balance), 40, 221, { width: 515, align: 'center' });
+    doc.roundedRect(40, 212, 515, 28, 6).fill(voided ? '#9b272c' : done ? '#2d7a4f' : '#d9922b');
+    doc.fillColor(voided || done ? '#fff' : '#2a1b00').font('Helvetica-Bold').fontSize(11)
+      .text(voided ? 'VOID INVOICE' : done ? 'PAID IN FULL  -  PAYMENT COMPLETED' : 'BALANCE DUE: ' + lkr(balance), 40, 221, { width: 515, align: 'center' });
 
     let y = 262;
     const x = { item: 48, qty: 300, rate: 340, per: 425, amt: 470 };
@@ -55,10 +55,10 @@ export function invoicePdf({ st, inv, items, paid }) {
       y += bold ? 24 : 19;
     };
     line('Subtotal', lkr(inv.subtotal));
-    if (inv.fees > 0) line('Extra charges', lkr(inv.fees));
+    if (inv.fees) line(inv.fees > 0 ? 'Extra charges' : 'Adjustments', lkr(inv.fees));
     line('Total', lkr(inv.total), true);
     line('Paid', lkr(paid));
-    line(done ? 'Balance' : 'Balance due', lkr(balance), true);
+    if (!voided) line(done ? 'Balance' : 'Balance due', lkr(balance), true);
     doc.fillColor('#666').font('Helvetica').fontSize(10).text('Thank you for choosing ' + st.businessName + '.', 40, Math.max(y + 30, 740), { width: 515, align: 'center' });
     doc.end();
   });

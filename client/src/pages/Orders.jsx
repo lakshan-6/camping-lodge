@@ -1,5 +1,6 @@
 import ResponsiveTable from '../components/ResponsiveTable.jsx';
 import { useEffect, useState, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, lkr } from '../api.js';
 import CustomerDetails from './CustomerDetails.jsx';
 import EditOrder from './EditOrder.jsx';
@@ -11,17 +12,10 @@ import Icon from '../components/Icon.jsx';
 import { formatPickup, formatReturn } from '../businessTime.js';
 import { PickupDialog, ExtendDialog } from './Rentals.jsx';
 import { ReturnDialog } from './Returns.jsx';
-
-const emailNotes = {
-  accepted: 'The booking confirmation was sent for delivery.',
-  no_email: 'No confirmation email was sent because this customer has no email address.',
-  invalid_email: 'No confirmation email was sent because the customer’s email address is invalid.',
-  not_configured: 'Confirmation email is not set up yet.',
-  failed: 'Email delivery could not be confirmed. Check the sending account before sending again.',
-  already_processed: 'This booking was already saved. No duplicate email was sent.',
-};
+import {emailStatusMessage} from '../emailStatus.js';
 
 export default function Orders({ me, maintenance=false }) {
+  const [params]=useSearchParams();
   const [orders, setOrders] = useState([]);
   const [creating, setCreating] = useState(false);
   const [bookingNotice, setBookingNotice] = useState('');
@@ -41,7 +35,7 @@ export default function Orders({ me, maintenance=false }) {
   const [workspace,setWorkspace] = useState(null);
   const [cancelling,setCancelling] = useState(null);
   const [saving,setSaving] = useState(false);
-  const [search,setSearch]=useState(''),[status,setStatus]=useState(''),[from,setFrom]=useState(''),[to,setTo]=useState(''),[page,setPage]=useState(1),[pageSize,setPageSize]=useState(25),[totalRows,setTotalRows]=useState(0),[loading,setLoading]=useState(true);
+  const [search,setSearch]=useState(()=>params.get('q')||''),[status,setStatus]=useState(''),[from,setFrom]=useState(''),[to,setTo]=useState(''),[page,setPage]=useState(1),[pageSize,setPageSize]=useState(25),[totalRows,setTotalRows]=useState(0),[loading,setLoading]=useState(true);
   const requestSequence=useRef(0);
   useEffect(() => {
     if (!pastDelete) return;
@@ -61,12 +55,9 @@ export default function Orders({ me, maintenance=false }) {
     if(o.status==='reserved'&&o.customer?.detailsPending&&can(me,'customers.write'))return <button onClick={()=>{setWorkspace(null);setDetails(o.customer);}}>Add customer details</button>;
     if(o.status==='reserved'&&!o.customer?.detailsPending&&can(me,'rentals.write'))return <button className="btn" onClick={()=>{setWorkspace(null);setBookingNotice('');setHandover(o);}}>Start pickup</button>;
     if(o.status==='active'&&can(me,'returns.write'))return <button className="btn" onClick={()=>{setWorkspace(null);setBookingNotice('');setReceiving(o);}}>Receive return</button>;
+    if(o.status==='settlement_pending'&&can(me,'returns.write'))return <button className="btn" onClick={()=>{setWorkspace(null);setBookingNotice('');setReceiving(o);}}>Complete settlement</button>;
     return null;
   };
-  async function remove(o) {
-    if (!confirm(`Hide booking ${o.orderNo} from the list and calendar? Reserved stock will be released. Bookings with unresolved money must be cancelled and settled first.`)) return;
-    try { await api(`/orders/${o._id}`, { method: 'DELETE' }); load(); } catch (x) { setErr(x.message); }
-  }
   async function removePast(e) {
     e.preventDefault();
     if (deleting) return;
@@ -87,7 +78,7 @@ export default function Orders({ me, maintenance=false }) {
       <div className="bar">{!maintenance&&can(me,'orders.write')&&(can(me,'payments.record')?<button className="btn" onClick={() => { setErr(''); setBookingNotice(''); setCreating(true); }}><Icon name="plus" size={17}/>New order</button>:<p>Ask someone with payment recording access to create the order and record the advance.</p>)}
         {maintenance && <label className="check"><input type="checkbox" checked={showDeleted} onChange={e => {setShowDeleted(e.target.checked);setStatus('');setPage(1);}} /> Previously hidden past orders</label>}
       </div>
-      <div className="bar filter-panel"><label>Search orders<input type="search" placeholder="Order no., customer, phone or NIC" maxLength={80} value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}/></label><label>Status<select value={maintenance?'completed':status} disabled={maintenance} onChange={e=>{setStatus(e.target.value);setPage(1);}}><option value="">All statuses</option>{['reserved','active','completed','cancelled'].map(s=><option key={s} value={s}>{s}</option>)}</select></label><label>Pickup from<input type="date" value={from} onChange={e=>{setFrom(e.target.value);setPage(1);}}/></label><label>Pickup to<input type="date" value={to} onChange={e=>{setTo(e.target.value);setPage(1);}}/></label><button onClick={()=>{setSearch('');setStatus('');setFrom('');setTo('');setPage(1);}}>Clear filters</button></div>
+      <div className="bar filter-panel"><label>Search orders<input type="search" placeholder="Order no., customer, phone or NIC" maxLength={80} value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}/></label><label>Status<select value={maintenance?'completed':status} disabled={maintenance} onChange={e=>{setStatus(e.target.value);setPage(1);}}><option value="">All statuses</option>{['reserved','active','settlement_pending','completed','cancelled'].map(s=><option key={s} value={s}>{s==='settlement_pending'?'Settlement pending':s}</option>)}</select></label><label>Pickup from<input type="date" value={from} onChange={e=>{setFrom(e.target.value);setPage(1);}}/></label><label>Pickup to<input type="date" value={to} onChange={e=>{setTo(e.target.value);setPage(1);}}/></label><button onClick={()=>{setSearch('');setStatus('');setFrom('');setTo('');setPage(1);}}>Clear filters</button></div>
       {err && !creating && <p className="bad">{err}</p>}
       {bookingNotice && <div className="notice" role="status">{bookingNotice}</div>}
       {loading&&<p role="status">Loading orders…</p>}
@@ -100,13 +91,12 @@ export default function Orders({ me, maintenance=false }) {
               <td data-l="Pickup">{formatPickup(o)}</td><td data-l="Return">{formatReturn(o)}</td>
               <td data-l="Items">{o.items.map(i => `${i.quantity}× ${i.equipment?.name}`).join(', ')}</td>
               <td data-l="Total">{lkr(o.totalAmount)}<small>{o.periods}× 36h</small></td>
-              <td data-l="Status"><span className={'tag ' + (o.status === 'cancelled' ? 'needs_repair' : '')}>{o.status}</span></td>
+              <td data-l="Status"><span className={'tag ' + (o.status === 'cancelled' ? 'needs_repair' : o.status==='settlement_pending'?'fair':'')}>{o.status==='settlement_pending'?'Settlement pending':o.status}</span></td>
               <td className="acts">
                 {nextAction(o)}<button onClick={()=>setWorkspace(o._id)}>View order</button>
-                {!maintenance&&['reserved','cancelled'].includes(o.status)&&can(me,'orders.write')&&<details className="desk-actions">
+                {!maintenance&&o.status==='reserved'&&can(me,'orders.write')&&<details className="desk-actions">
                   <summary>More actions</summary><div className="bar">
-                    {o.status==='reserved'&&<><button onClick={()=>setEditing(o)}>Change booking</button><button onClick={()=>cancel(o)}>Cancel booking</button></>}
-                    <button onClick={()=>remove(o)}>Hide from list</button>
+                    <button onClick={()=>setEditing(o)}>Change booking</button><button onClick={()=>cancel(o)}>Cancel booking</button>
                   </div>
                 </details>}
                 {!maintenance&&o.status==='active'&&can(me,'rentals.write')&&<details className="desk-actions"><summary>More actions</summary><button onClick={()=>setExtending(o)}>Extend rental</button></details>}
@@ -143,7 +133,7 @@ export default function Orders({ me, maintenance=false }) {
           </form>
         </div>
       )}
-      {creating && <NewOrderDialog me={me} onClose={() => setCreating(false)} onSaved={saved => { setBookingNotice(`${saved.orderNo} saved. ${emailNotes[saved.bookingEmail] || ''}`.trim()); setCreating(false); setPage(1); load(); }} />}
+      {creating && <NewOrderDialog me={me} onClose={() => setCreating(false)} onSaved={saved => { setBookingNotice(`${saved.orderNo} saved. ${emailStatusMessage(saved.bookingEmail)}`.trim()); setCreating(false); setPage(1); load(); }} />}
     </>
   );
 }

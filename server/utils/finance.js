@@ -14,17 +14,26 @@ export async function depositHeld(id, session = null) {
   const rows = await DepositTransaction.find({ order: id }).session(session);
   return Math.round(rows.reduce((s,p) => s + (p.type === 'collect' ? p.amount : -p.amount),0)*100)/100;
 }
+export async function closeSettledOrder(order,session){
+  if(order.status!=='settlement_pending'||(order.nicHeldAt&&!order.nicReturnedAt))return;
+  const balance=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
+  if(!balance&&!(await depositHeld(order._id,session))){
+    order.status='completed';
+    await order.save({session});
+  }
+}
 export async function recordSecurityDeposit(order,body,user,session){
   const type=body.type;if(!['collect','refund','apply'].includes(type))throw httpErr(400,'Choose a deposit action');
   assertPermission(user,type==='collect'?'payments.record':'payments.refund');
   const amount=money(body.amount),held=await depositHeld(order._id,session);
   if(type==='collect'&&order.status==='reserved'&&!order.securityMethod)throw httpErr(409,'Choose and confirm security during pickup');
   if(type==='collect'&&(order.securityMethod==='nic'||(order.nicHeldAt&&!order.nicReturnedAt)))throw httpErr(409,'This order uses NIC security. Return any held NIC and choose money security before collecting a deposit.');
-  if(type==='collect'&&(order.status==='cancelled'||Math.round(amount*100)>Math.round((order.depositAmount-held)*100)))throw httpErr(409,'Deposit collection exceeds the required deposit or this booking is cancelled');
+  if(type==='collect'&&(!['reserved','active'].includes(order.status)||Math.round(amount*100)>Math.round((order.depositAmount-held)*100)))throw httpErr(409,'Collect security only for open bookings or rentals and within the required deposit amount');
   if(type!=='collect'&&amount>held)throw httpErr(409,'Amount exceeds the held security deposit');
   if(type!=='collect'&&!body.reason?.trim())throw httpErr(400,'Enter a reason');
   if(type==='apply')await recordPayment(order,{amount,type:'balance',method:'other',reference:'Applied security deposit',reason:body.reason},{...user,role:user.role,permissions:[...(user.permissions||[]),'payments.record']},session);
   const [row]=await DepositTransaction.create([{order:order._id,type,amount,method:methodOf(body.method),reason:body.reason,actor:user._id}],{session});
+  await closeSettledOrder(order,session);
   await audit(session,user,'security_deposit.'+type,order._id,{held},{amount,held:held+(type==='collect'?amount:-amount)});return row;
 }
 export async function syncInvoice(order, session, create = false) {
@@ -45,6 +54,20 @@ export async function recordPayment(order, body, user, session) {
   if (type === 'refund') {
     if (!body.reason?.trim()) throw httpErr(400, 'Enter a reason for the refund');
     if (amount > paid) throw httpErr(409, 'Refund cannot exceed net rental payments received');
+    const newBalance = rentalBalanceDue(order.totalAmount, paid - amount);
+    if (order.status === 'completed' && newBalance > 0) {
+      const before = { status: order.status, totalAmount: order.totalAmount };
+      if (body.refundCorrection === 'reduce_charge') {
+        order.totalAmount = money(order.totalAmount - newBalance, 'Corrected rental total', true);
+      } else if (body.refundCorrection === 'reopen') {
+        order.status = 'settlement_pending';
+      } else {
+        throw httpErr(409, 'Choose whether to reduce the rental charge or reopen the balance');
+      }
+      await order.save({session});
+      await audit(session, user, 'order.refund_correction', order._id, before,
+        { status: order.status, totalAmount: order.totalAmount, reason: body.reason });
+    }
   } else {
     if (order.status === 'cancelled') throw httpErr(409, 'Cancelled bookings only accept refunds');
     if (amount > rentalBalanceDue(order.totalAmount, paid)) {
@@ -54,10 +77,11 @@ export async function recordPayment(order, body, user, session) {
   }
   const [payment] = await Payment.create([{ order: order._id, amount, type, method: methodOf(body.method), reference: [body.reference,body.reason].filter(Boolean).join(' - ') }], {session});
   if (order.status === 'cancelled' && order.cancellation) { order.cancellation.refundPending = Math.max(0,paid-(type==='refund'?amount:-amount)); await order.save({session}); }
+  await closeSettledOrder(order,session);
   await syncInvoice(order,session);
   return payment;
 }
-export async function priceItems(body, session, exclude) {
+export async function priceItems(body, session, exclude, lockedRates=new Map()) {
   const window = bookingWindow(body.pickupDate,body.startDate,body.endDate);
   const { start,end,periods } = window;
   const { plannedReturnDate } = body;
@@ -69,14 +93,15 @@ export async function priceItems(body, session, exclude) {
     wanted.set(String(i.equipment), (wanted.get(String(i.equipment)) || 0)+units(i.quantity));
   }
   await Equipment.updateMany({ _id: { $in: [...wanted.keys()] } }, { $inc: { revision: 1 } }, {session});
-  const avail = new Map((await availability(start,end,exclude,session)).map(i=>[String(i._id),i]));
+  const avail = new Map((await availability(start,window.reservedUntil,exclude,session)).map(i=>[String(i._id),i]));
   let total=0,deposit=0;
   const lines = [...wanted].map(([id,quantity])=>{
     const item=avail.get(id);
     if (!item || quantity>item.available) throw httpErr(409,`${item?.name || 'Equipment'} is not available in the requested quantity`);
-    const lineTotal=money(quantity*item.periodRate*periods,'Rental total',true);
+    const periodRate=lockedRates.get(id)??item.periodRate;
+    const lineTotal=money(quantity*periodRate*periods,'Rental total',true);
     total+=lineTotal;deposit+=quantity*item.deposit;
-    return { equipment:id,quantity,periodRate:item.periodRate,periods,lineTotal,returnedQuantity:0 };
+    return { equipment:id,quantity,periodRate,periods,lineTotal,returnedQuantity:0 };
   });
   return { ...window,plannedReturnDate,lines,total:money(total,'Total',true),deposit:money(deposit,'Deposit',true) };
 }

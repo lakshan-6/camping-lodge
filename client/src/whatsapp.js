@@ -6,6 +6,7 @@ export async function sendInvoiceWhatsApp(id) {
   const w = window.open('', '_blank');
   try {
     const [i, st] = await Promise.all([api('/invoices/' + id), api('/settings')]);
+    if (i.status === 'void') throw new Error('This invoice is void');
     const d = String(i.customer?.phone || '').replace(/\D/g, '');
     const num = d.startsWith('94') ? d : d.startsWith('0') ? '94' + d.slice(1) : d;
     const done = i.balance <= 0;

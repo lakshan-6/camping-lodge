@@ -104,7 +104,7 @@ export default function App() {
     if(['/repairs','/stock-counts'].includes(to))return can(user,'inventory.manage');
     if(to==='/expenses')return can(user,'expenses.manage');
     if(to==='/reports')return can(user,'reports.view');
-    if(to==='/payments')return can(user,'finance.view')||can(user,'payments.record')||can(user,'payments.refund');
+    if(to==='/money')return ['finance.view','finance.close','payments.refund'].some(permission=>can(user,permission));
     return admin||!adminOnly.includes(to);
   });
   const title = (nav.find(n => n[0] === pathname) || nav[0])[1];

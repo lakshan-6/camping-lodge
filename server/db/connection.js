@@ -68,6 +68,10 @@ async function migrate(){
     ADD COLUMN IF NOT EXISTS "lateFeeFullRateAfterHours" numeric(16,2) CHECK ("lateFeeFullRateAfterHours" >= 0.01)`,[],session);
    await query('INSERT INTO schema_migrations(version) VALUES(5)',[],session);
   }
+  if(!(await query('SELECT version FROM schema_migrations WHERE version=6',[],session)).rows.length){
+   await query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check, ADD CONSTRAINT orders_status_check CHECK (status IN ('reserved','active','settlement_pending','completed','cancelled'))",[],session);
+   await query('INSERT INTO schema_migrations(version) VALUES(6)',[],session);
+  }
  });
 }
 export async function connectDatabase(url=process.env.DATABASE_URL){

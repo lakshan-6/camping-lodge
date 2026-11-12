@@ -16,6 +16,10 @@ The interface adapts to phones, tablets and desktops. Desktop navigation is grou
 - server/routes/: authenticated feature APIs with permissions and transactional business writes.
 - client/src/pages/: application screens. See [WORKFLOWS.md](WORKFLOWS.md) for daily use and [DEPLOYMENT.md](DEPLOYMENT.md) for deployment.
 
+## Backups
+
+The owner can download an encrypted recovery copy from **Backups**. To store verified copies outside the live database, connect a private S3-compatible bucket using the [external backup setup guide](EXTERNAL_BACKUPS.md).
+
 ## Authentication security
 - Run `npm run configure-auth` in `server` before first start to generate AUTH_SECRET and SETUP_KEY in the ignored .env file. Existing strong keys are preserved.
 - First owner setup requires SETUP_KEY from server/.env. Keep it private; it is never sent by the status endpoint. Setup is serialized by a PostgreSQL transaction/advisory lock and a unique owner constraint.

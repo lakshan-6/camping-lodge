@@ -46,7 +46,7 @@ export const Order = model('Order', new Schema({
   plannedReturnDate: String,
   startDate: { type: Date, required: true },
   endDate: { type: Date, required: true },
-  status: { type: String, enum: ['reserved', 'active', 'completed', 'cancelled'], default: 'reserved' },
+  status: { type: String, enum: ['reserved', 'active', 'settlement_pending', 'completed', 'cancelled'], default: 'reserved' },
   totalAmount: { type: Number, default: 0 },
   depositAmount: { type: Number, default: 0 },
   securityMethod: { type: String, enum: ['nic', 'money'] },

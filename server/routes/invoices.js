@@ -1,13 +1,16 @@
 import { Router } from 'express';
-import { Order,OrderItem,Invoice,Payment } from '../models/index.js';
+import { Order,OrderItem,Invoice } from '../models/index.js';
 import { emailInvoice,invoicePdfBuffer } from '../utils/invoiceMail.js';
 import { syncInvoice,paidTotal } from '../utils/finance.js';
 import { mutate,audit } from '../utils/operations.js';
-import { requirePermission } from '../utils/permissions.js';
+import { requirePermission,can } from '../utils/permissions.js';
 import { httpErr } from '../utils/availability.js';
 import { mailReady } from '../utils/mail.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
-r.get('/',wrap(async(req,res)=>res.json(await Invoice.find().sort({createdAt:-1}).populate('customer','name').populate('order','orderNo').lean())));
+r.get('/',wrap(async(req,res)=>{
+ if(!can(req.user,'finance.view')&&!can(req.user,'payments.refund'))throw httpErr(403,'Financial access is not enabled for this account');
+ res.json(await Invoice.find().sort({issuedAt:-1}).populate('customer','name').populate('order','orderNo').lean());
+}));
 r.get('/:id',wrap(async(req,res)=>{const invoice=await Invoice.findById(req.params.id).populate('customer').populate('order').lean();if(!invoice)throw httpErr(404,'Invoice not found');res.json({...invoice,items:await OrderItem.find({order:invoice.order._id}).populate('equipment','name').lean(),paid:await paidTotal(invoice.order._id),balance:invoice.total-await paidTotal(invoice.order._id)});}));
 r.post('/',requirePermission('payments.record'),wrap(async(req,res)=>res.status(201).json(await mutate(req,'invoice.create:'+req.body.order,async session=>{const order=await Order.findById(req.body.order).session(session);if(!order||order.status==='cancelled')throw httpErr(404,'Order not found');const invoice=await syncInvoice(order,session,true);await audit(session,req.user,'invoice.created',order._id,null,{invoiceNo:invoice.invoiceNo});return invoice;}))));
 r.get('/:id/pdf',wrap(async(req,res)=>{const {buffer,invoiceNo}=await invoicePdfBuffer(req.params.id);res.type('application/pdf').set('Content-Disposition',`inline; filename="${invoiceNo}.pdf"`).send(buffer);}));

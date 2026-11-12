@@ -1,5 +1,6 @@
 import { Order, OrderItem, ReturnItem, Settings } from '../models/index.js';
 import { depositHeld, paidTotal } from './finance.js';
+import { audit } from './operations.js';
 
 const endpoint = 'https://api.brevo.com/v3/smtp/email';
 const address = value => typeof value === 'string' ? value.trim() : '';
@@ -40,7 +41,16 @@ function message(order, settings, recipient, sender, {title, intro, tag, details
 }
 
 // Called after the booking transaction commits. A failed provider call never changes the order.
-async function sendCustomerUpdate(orderId, build) {
+async function sendCustomerUpdate(orderId, event, build) {
+  const status = await deliverCustomerUpdate(orderId, build);
+  if (status !== 'not_applicable') {
+    try { await audit(null, null, 'email.' + event, orderId, null, {status}); }
+    catch { console.warn('Could not record customer email status for order', String(orderId)); }
+  }
+  return status;
+}
+
+async function deliverCustomerUpdate(orderId, build) {
   const key = process.env.BREVO_API_KEY?.trim();
   const sender = address(process.env.BOOKING_EMAIL_FROM);
   if (!key || !isMailbox(sender)) return 'not_configured';
@@ -61,7 +71,10 @@ async function sendCustomerUpdate(orderId, build) {
       headers: { 'api-key': key, 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(message(order, settings, recipient, sender, update)),
     });
-    if (response.status !== 201) { await response.body?.cancel(); return 'failed'; }
+    if (response.status !== 201) {
+      await response.body?.cancel();
+      return [400,401,403,422,429].includes(response.status) ? 'rejected' : 'failed';
+    }
     const sent = await response.json();
     return typeof sent.messageId === 'string' && sent.messageId ? 'accepted' : 'failed';
   } catch {
@@ -73,7 +86,7 @@ const orderItems = order => OrderItem.find({ order: order._id }).populate('equip
 const itemName = item => oneLine(item.equipment?.name) || 'Equipment';
 
 export function sendBookingConfirmation(orderId) {
-  return sendCustomerUpdate(orderId, async order => {
+  return sendCustomerUpdate(orderId, 'booking', async order => {
     if (order.status !== 'reserved') return null;
     const [items, paid] = await Promise.all([orderItems(order), paidTotal(orderId)]);
     return { title: 'Booking confirmation', tag: 'booking-confirmation', intro: 'Your rental booking is confirmed. Here are your order details.', details: [
@@ -90,7 +103,7 @@ export function sendBookingConfirmation(orderId) {
 }
 
 export function sendPaymentUpdate(payment) {
-  return sendCustomerUpdate(payment.order, async order => {
+  return sendCustomerUpdate(payment.order, 'payment', async order => {
     const paid = await paidTotal(order._id);
     return { title: payment.type === 'refund' ? 'Refund confirmation' : 'Payment confirmation', tag: 'payment-confirmation',
       intro: 'A rental transaction has been recorded for your booking.', details: [
@@ -101,15 +114,23 @@ export function sendPaymentUpdate(payment) {
 }
 
 export function sendDepositUpdate(deposit) {
-  return sendCustomerUpdate(deposit.order, async order => {
+  return sendCustomerUpdate(deposit.order, 'deposit', async order => {
     const [held, paid] = await Promise.all([depositHeld(order._id), paidTotal(order._id)]);
     return { title: 'Security deposit update', tag: 'security-deposit-update', intro: 'Your refundable security deposit record has been updated.',
       details: [depositLine(deposit), ['Security deposit held', money(held)], rentalBalance(order, paid)] };
   });
 }
 
+export function sendSettlementUpdate(orderId,payment,deposits) {
+  return sendCustomerUpdate(orderId,'settlement',async order=>{
+    const [held,paid]=await Promise.all([depositHeld(order._id),paidTotal(order._id)]);
+    return {title:'Return settlement update',tag:'return-settlement',intro:'Payment and security actions for your return have been recorded.',
+      details:[...(payment?[paymentLine(payment)]:[]),...deposits.map(depositLine),['Security deposit held',money(held)],rentalBalance(order,paid)]};
+  });
+}
+
 export function sendPickupUpdate(rental, payment, deposit) {
-  return sendCustomerUpdate(rental.order, async order => {
+  return sendCustomerUpdate(rental.order, 'pickup', async order => {
     const [items, paid] = await Promise.all([orderItems(order), paidTotal(order._id)]);
     return { title: 'Pickup confirmation', tag: 'pickup-confirmation', intro: 'Your equipment pickup has been recorded.', details: [
       ['Picked up (Sri Lanka time)', date(rental.pickedUpAt)], ['Due back (Sri Lanka time)', date(rental.dueDate)],
@@ -119,7 +140,7 @@ export function sendPickupUpdate(rental, payment, deposit) {
 }
 
 export function sendReturnUpdate(orderId, record, payments) {
-  return sendCustomerUpdate(orderId, async order => {
+  return sendCustomerUpdate(orderId, 'return', async order => {
     const [items, paid] = await Promise.all([
       ReturnItem.find({ return: record._id }).populate('equipment', 'name').lean(), paidTotal(orderId),
     ]);

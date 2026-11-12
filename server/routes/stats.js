@@ -8,10 +8,12 @@ const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const net=async range=>(await Payment.aggregate([...(range?[{$match:{paidAt:range}}]:[]),{$group:{_id:null,t:{$sum:{$cond:[{$eq:['$type','refund']},{$multiply:['$amount',-1]},'$amount']}}}}]))[0]?.t||0;
 r.get('/today',wrap(async(req,res)=>{
  const range=dayRange(localDate(new Date())),orders=await Order.find({deletedAt:null,status:'reserved',startDate:range}).populate('customer','name phone').lean();
+ const missed=await Order.find({deletedAt:null,status:'reserved',startDate:{$lt:range.$gte}}).sort({startDate:-1}).limit(100).populate('customer','name phone').lean();
+ const pending=await Order.find({deletedAt:null,status:'settlement_pending'}).sort({updatedAt:-1}).limit(100).populate('customer','name phone').lean();
  const out=await Rental.find({status:'out'}).populate('customer','name phone').populate('order','orderNo').lean();
  const due=out.filter(r=>new Date(r.dueDate)>=range.$gte&&new Date(r.dueDate)<range.$lt),overdue=out.filter(r=>new Date(r.dueDate)<new Date());
  const unpaid=[];if(can(req.user,'finance.view'))for(const o of await Order.find({status:{$ne:'cancelled'},deletedAt:null}).populate('customer','name phone').lean()){const balance=o.totalAmount-await paidTotal(o._id);if(balance>0)unpaid.push({...o,balance});}
- res.json({date:localDate(new Date()),pickups:orders,returns:due,overdue,unpaid});
+ res.json({date:localDate(new Date()),pickups:orders,missed,pending,returns:due,overdue,unpaid});
 }));
 r.get('/',wrap(async(req,res)=>{
  const now=new Date(),avail=await availability(now,new Date(+now+1)),financial=can(req.user,'finance.view');
