@@ -263,6 +263,20 @@ test('business workflows against an isolated PostgreSQL database',{timeout:12000
   const separate=await ok('/orders','POST',{...newPerson,customerDetails:{...newPerson.customerDetails,confirmDifferentPerson:true}});
   assert.notEqual(separate.customer,legacy._id);assert.equal((await M.Customer.findById(legacy._id)).nic,undefined);
  });
+ await t.test('order details retain the authenticated booking creator after staff deletion',async()=>{
+  const clerk=await M.User.create({name:'Booking Clerk',username:'booking-clerk',passwordHash,role:'staff',permissions:['orders.write','payments.record']});
+  const gear=await ok('/equipment','POST',{name:'Creator test lantern',category:'Lighting',totalQuantity:1,periodRate:800});
+  const body={customer:customer._id,...dates(),items:[{equipment:gear._id,quantity:1}],advance,requestId:crypto.randomUUID(),placedByName:'Spoofed name'};
+  const created=await ok('/orders','POST',body,sign(clerk));
+  const path=`/orders/${created._id}/detail`;
+  const detail=await ok(path);
+  assert.equal(detail.placedByName,'Booking Clerk');
+  assert.equal((await ok(`/orders/${order._id}/detail`)).placedByName,'Owner');
+  await ok('/users/'+clerk._id,'DELETE');
+  assert.equal((await ok(path)).placedByName,'Booking Clerk');
+  await M.AuditEvent.deleteOne({target:String(created._id),action:'order.created'});
+  assert.equal((await ok(path)).placedByName,null);
+ });
  await t.test('custom money deposit stays due until collected and survives booking edits',async()=>{
   const gear=await ok('/equipment','POST',{name:'Deposit test tent',category:'Camping',totalQuantity:2,periodRate:400,deposit:50});
   const body={customer:customer._id,...dates(),items:[{equipment:gear._id,quantity:1}],securityMethod:'money',advance};

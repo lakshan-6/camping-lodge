@@ -32,7 +32,7 @@ export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions
  <div className="bar"><h2>{data?.orderNo||'Order details'}</h2><button onClick={onClose} disabled={busy}>Close</button></div>
  {error&&<p className="bad" role="alert">{error}</p>}
  {notice&&<p className="notice" role="status">{notice}</p>}
- {data&&<><div className="bar"><p><b>{data.customer?.name}</b> · {data.customer?.phone} · {data.status}</p>{nextAction?.(data)}</div>
+ {data&&<><div className="bar"><p><b>{data.customer?.name}</b> · {data.customer?.phone} · {data.status}<br/><small>Placed by: <strong>{data.placedByName||'Not recorded'}</strong></small></p>{nextAction?.(data)}</div>
  {!nextAction&&data.status==='settlement_pending'&&can(me,'returns.write')&&<button onClick={()=>setSettling(true)}>Complete settlement</button>}
  <div className="metric-row"><p>Pickup <b>{formatPickup(data)}</b></p><p>Return <b>{formatReturn(data)}</b></p><p>Rental total <b>{lkr(data.totalAmount)}</b></p><p>Rental balance <b>{lkr(data.status==='cancelled'?0:data.totalAmount-data.paid)}</b></p></div>
  <ResponsiveTable><thead><tr><th>Item</th><th>Qty</th><th>Returned</th><th>Unit codes</th><th>Amount</th></tr></thead><tbody>{data.items.map(i=><tr key={i._id}><td>{i.equipment?.name}</td><td>{i.quantity}</td><td>{i.returnedQuantity||0}</td><td>{i.unitAssignments?.length?i.unitAssignments.map(u=><small key={u.unit}><b>{u.code}</b> · {u.outcome}</small>):'Quantity tracked'}</td><td>{lkr(i.lineTotal)}</td></tr>)}</tbody></ResponsiveTable>
