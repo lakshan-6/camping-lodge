@@ -2,15 +2,27 @@ import { Router } from 'express';
 import { Order,Payment,DepositTransaction } from '../models/index.js';
 import { httpErr } from '../utils/availability.js';
 import { mutate,audit } from '../utils/operations.js';
-import { can } from '../utils/permissions.js';
+import { can,requirePermission } from '../utils/permissions.js';
 import { recordPayment,paidTotal,depositHeld,recordSecurityDeposit } from '../utils/finance.js';
 import { sendDepositUpdate,sendPaymentUpdate } from '../utils/bookingEmail.js';
+import { moneySummary,cancellationActions } from '../utils/moneySummary.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const financeView=(req,res,next)=>can(req.user,'finance.view')||can(req.user,'payments.refund')?next():next(httpErr(403,'Financial access is not enabled for this account'));
 const view=(req,res,next)=>can(req.user,'payments.record')?next():financeView(req,res,next);
+r.get('/summary',requirePermission('finance.view'),wrap(async(req,res)=>{
+ res.json(await moneySummary(req.query));
+}));
 r.get('/balances',financeView,wrap(async(req,res)=>{
  const orders=await Order.find({deletedAt:null}).sort({createdAt:-1}).populate('customer','name phone').lean(),out=[];
- for(const o of orders){const paid=await paidTotal(o._id),held=await depositHeld(o._id);if(o.status==='cancelled'&&paid<=0&&held<=0)continue;out.push({...o,paid,balance:o.status==='cancelled'?0:Math.round((o.totalAmount-paid)*100)/100,refundDue:o.status==='cancelled'&&o.cancellation?.action!=='keep'?paid:0,securityHeld:held});}
+ const actions=await cancellationActions(orders);
+ for(const order of orders){
+  const paid=await paidTotal(order._id),held=await depositHeld(order._id);
+  if(order.status==='cancelled'&&paid<=0&&held<=0)continue;
+  const balance=order.status==='cancelled'?0:Math.round((order.totalAmount-paid)*100)/100;
+  let refundDue=Math.max(0,-balance);
+  if(order.status==='cancelled'&&actions.get(String(order._id))!=='keep')refundDue=Math.max(0,paid);
+  out.push({...order,paid,balance,refundDue,securityHeld:held});
+ }
  res.json(out);
 }));
 r.get('/',financeView,wrap(async(req,res)=>res.json(await Payment.find().sort({paidAt:-1}).limit(300).populate({path:'order',select:'orderNo customer',populate:{path:'customer',select:'name'}}).lean())));
