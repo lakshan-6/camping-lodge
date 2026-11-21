@@ -35,14 +35,22 @@ export default function MoneyOverview() {
 
   function choosePeriod(value) {
     setPeriod(value);
+    const currentDate = businessDate();
     if (value === 'all') setQuery('');
-    if (value === 'today') setQuery(`?from=${today}&to=${today}`);
-    if (value === 'month') setQuery(`?from=${today.slice(0, 7)}-01&to=${today}`);
+    if (value === 'today') setQuery(`?from=${currentDate}&to=${currentDate}`);
+    if (value === 'week') {
+      const monday = new Date(currentDate + 'T00:00:00Z');
+      monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7);
+      setQuery(`?from=${monday.toISOString().slice(0, 10)}&to=${currentDate}`);
+    }
+    if (value === 'month') setQuery(`?from=${currentDate.slice(0, 7)}-01&to=${currentDate}`);
+    if (value === 'year') setQuery(`?from=${currentDate.slice(0, 4)}-01-01&to=${currentDate}`);
   }
 
   function showTotals(event) {
     event.preventDefault();
     if (period === 'custom') setQuery('?' + new URLSearchParams({from, to}));
+    else choosePeriod(period);
     setRevision(value => value + 1);
   }
 
@@ -55,7 +63,9 @@ export default function MoneyOverview() {
       <label>Period<select value={period} onChange={e => choosePeriod(e.target.value)}>
         <option value="all">All time</option>
         <option value="today">Today</option>
+        <option value="week">This week</option>
         <option value="month">This month</option>
+        <option value="year">This year</option>
         <option value="custom">Choose dates</option>
       </select></label>
       {period === 'custom' && <>
