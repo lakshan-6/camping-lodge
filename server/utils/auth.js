@@ -38,7 +38,13 @@ export async function requireAuth(req, res, next) {
     if (!p || !sig || sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) throw httpErr(401, 'Please log in');
     const d = JSON.parse(Buffer.from(p, 'base64url'));
     if (!Number.isFinite(d.exp) || d.exp <= Date.now()) throw httpErr(401, 'Session expired');
-    const u = await User.findById(d.id);
+    if (typeof d.id !== 'string' || !/^[a-f0-9]{24}$/i.test(d.id)) throw httpErr(401, 'Please log in');
+    let u;
+    try {
+      u = await User.findById(d.id);
+    } catch {
+      throw httpErr(503, 'Sign-in service is temporarily unavailable. Try again shortly.');
+    }
     if (!u || !u.active) throw httpErr(401, 'Account disabled');
     if (d.session !== session(u)) throw httpErr(401, 'Please log in again');
     req.user = u;

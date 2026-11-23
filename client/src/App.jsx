@@ -53,6 +53,8 @@ export default function App() {
   useModalAccessibility();
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(!getToken());
+  const [connectionError, setConnectionError] = useState('');
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [st, setSt] = useState({ businessName: 'Camping Lodge', phone: '' });
   const [open, setOpen] = useState(false);
   const [online, setOnline] = useState(0);
@@ -60,8 +62,21 @@ export default function App() {
   const { pathname } = useLocation();
 
   useEffect(() => {
-    if (getToken()) api('/auth/me').then(setUser).catch(() => setToken(null)).finally(() => setReady(true));
-  }, []);
+    if (!getToken()) { setReady(true); return; }
+    let active = true;
+    setReady(false);
+    setConnectionError('');
+    api('/auth/me').then(data => {
+      if (typeof data?.name !== 'string' || typeof data?.role !== 'string')
+        throw new Error('Could not confirm your login. Please try again.');
+      if (active) setUser(data);
+    }).catch(error => {
+      if (!active) return;
+      if (error.status === 401) { setToken(null); setUser(null); }
+      else setConnectionError(error.message);
+    }).finally(() => { if (active) setReady(true); });
+    return () => { active = false; };
+  }, [connectionAttempt]);
   useEffect(() => { if (user) api('/settings').then(setSt).catch(() => {}); }, [user]);
   useEffect(()=>{setOpen(false);},[pathname]);
   useEffect(()=>{
@@ -92,6 +107,12 @@ export default function App() {
   }, [user]);
 
   if (!ready) return <div className="app-loading" role="status"><Icon name="tent" size={36}/><p>Opening Camping Lodge…</p></div>;
+  if (connectionError && !user) return <div className="login"><form onSubmit={event => { event.preventDefault(); setConnectionAttempt(value => value + 1); }}>
+    <img src="/logo.png" alt="Camping Lodge" className="login-logo"/>
+    <h2>Connection interrupted</h2>
+    <p className="bad" role="alert">{connectionError}</p>
+    <button className="btn">Try again</button>
+  </form></div>;
   if (!user) return <Login onLogin={setUser} />;
   const admin = ['owner', 'admin'].includes(user.role);
   const pages = { '/': <Today me={user}/>, '/dashboard': <Dashboard me={user}/>, '/inventory': <Inventory me={user}/>, '/stock-counts':<StockCounts/>, '/availability': <Availability me={user}/>, '/orders': <Orders key="orders" me={user} />,

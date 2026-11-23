@@ -14,11 +14,14 @@ process.env.SETUP_KEY = crypto.randomBytes(32).toString('hex');
 
 test('authentication security regression checks (isolated model doubles)', async t => {
   t.mock.method(AuditEvent,'create',async()=>[]);
-  let account;
+  let account,lookupFailure;
   let creates = 0;
   t.mock.method(User, 'countDocuments', () => ({session(){return this;},then(resolve,reject){return Promise.resolve(account?1:0).then(resolve,reject);}}));
   t.mock.method(User, 'findOne', async ({ username }) => account?.username === username ? account : null);
-  t.mock.method(User, 'findById', async id => String(id) === account?._id ? account : null);
+  t.mock.method(User, 'findById', async id => {
+    if(lookupFailure)throw lookupFailure;
+    return String(id) === account?._id ? account : null;
+  });
   t.mock.method(User, 'create', async data => {
     const many=Array.isArray(data);if(many)data=data[0];
     creates++;
@@ -77,6 +80,22 @@ test('authentication security regression checks (isolated model doubles)', async
       const forged = p + '.' + crypto.createHmac('sha256', process.env.AUTH_SECRET).update(p).digest('base64url');
       assert.equal((await request('/auth/me', undefined, forged, 'GET')).status, 401);
     }
+  });
+  await t.test('a temporary account lookup failure keeps the signed session valid after recovery', async () => {
+    const token=sign(account);
+    lookupFailure=new Error('ECONNREFUSED private-database-host');
+    try{
+      const claims=JSON.parse(Buffer.from(token.split('.')[0],'base64url'));
+      const payload=Buffer.from(JSON.stringify({...claims,id:{invalid:'account'}})).toString('base64url');
+      const malformed=payload+'.'+crypto.createHmac('sha256',process.env.AUTH_SECRET).update(payload).digest('base64url');
+      assert.equal((await request('/auth/me',undefined,malformed,'GET')).status,401);
+      const response=await request('/auth/me',undefined,token,'GET');
+      assert.equal(response.status,503);
+      const data=await response.json();
+      assert.match(data.error,/temporarily unavailable/i);
+      assert.doesNotMatch(data.error,/ECONNREFUSED|private-database-host/);
+    }finally{lookupFailure=undefined;}
+    assert.equal((await request('/auth/me',undefined,token,'GET')).status,200);
   });
   await t.test('logout revokes sessions; a new login works', async () => {
     const token = sign(account);
