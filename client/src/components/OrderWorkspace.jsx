@@ -7,12 +7,14 @@ import SecurityDeposit from './SecurityDeposit.jsx';
 import {emailStatusMessage} from '../emailStatus.js';
 import {formatPickup,formatReturn} from '../businessTime.js';
 import SettlementDialog from './SettlementDialog.jsx';
+import LateFeeWaiverDialog from './LateFeeWaiverDialog.jsx';
 const labels={deposit:'Rental advance',rental:'Rental payment',balance:'Rental balance',fee:'Extra charge',refund:'Refund to customer'};
 const emailLabels={booking:'Booking confirmation',pickup:'Pickup confirmation',payment:'Rental payment',deposit:'Security deposit',return:'Equipment return',settlement:'Return settlement'};
 export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions=true,nextAction}){
  const [data,setData]=useState(null),[error,setError]=useState(''),[form,setForm]=useState(null),[busy,setBusy]=useState(false),[settings,setSettings]=useState(null),[history,setHistory]=useState(null);
  const [notice,setNotice]=useState('');
  const [settling,setSettling]=useState(false);
+ const [feeWaiver,setFeeWaiver]=useState(null);
  const load=()=>api('/orders/'+id+'/detail').then(setData).catch(e=>setError(e.message));
  useEffect(()=>{load();api('/settings').then(setSettings).catch(()=>{});},[id]);
  const open=(mode,type)=>{setError('');setNotice('');const depositDue=Math.max(0,Math.round((data.depositAmount-data.securityHeld)*100)/100);setForm({mode,type,amount:mode==='security'?(type==='collect'?depositDue:data.securityHeld):type==='refund'?data.paid:Math.max(0,data.totalAmount-data.paid),method:'cash',reason:'',allowOverpayment:false,requestId:crypto.randomUUID()});};
@@ -25,6 +27,9 @@ export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions
   catch(e){setError(e.message);}finally{setBusy(false);}
  }
  const whatsappUpdates=data?getOrderWhatsAppUpdates(data,settings?.businessName):[];
+ if(feeWaiver)return <LateFeeWaiverDialog record={feeWaiver} orderNo={data.orderNo} onClose={()=>{setFeeWaiver(null);load();}} onSaved={async message=>{
+  setFeeWaiver(null);setNotice(message);await load();onSaved?.();
+ }}/>;
  if(settling)return <SettlementDialog order={data} me={me} onClose={()=>setSettling(false)} onSaved={async message=>{
   setSettling(false);setNotice(message);await load();onSaved?.();
  }}/>;
@@ -36,6 +41,15 @@ export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions
  {!nextAction&&data.status==='settlement_pending'&&can(me,'returns.write')&&<button onClick={()=>setSettling(true)}>Complete settlement</button>}
  <div className="metric-row"><p>Pickup <b>{formatPickup(data)}</b></p><p>Return <b>{formatReturn(data)}</b></p><p>Rental total <b>{lkr(data.totalAmount)}</b></p><p>Rental balance <b>{lkr(data.status==='cancelled'?0:data.totalAmount-data.paid)}</b></p></div>
  <ResponsiveTable><thead><tr><th>Item</th><th>Qty</th><th>Returned</th><th>Unit codes</th><th>Amount</th></tr></thead><tbody>{data.items.map(i=><tr key={i._id}><td>{i.equipment?.name}</td><td>{i.quantity}</td><td>{i.returnedQuantity||0}</td><td>{i.unitAssignments?.length?i.unitAssignments.map(u=><small key={u.unit}><b>{u.code}</b> · {u.outcome}</small>):'Quantity tracked'}</td><td>{lkr(i.lineTotal)}</td></tr>)}</tbody></ResponsiveTable>
+ {data.returnFees?.some(record=>record.lateFee>0||record.waivedFee>0)&&<section className="card">
+  <h3>Return late fees</h3>
+  {data.returnFees.filter(record=>record.lateFee>0||record.waivedFee>0).map(record=><div className="bar" key={record._id}>
+   <p>{new Date(record.returnedAt).toLocaleString('en-LK',{timeZone:'Asia/Colombo'})}<br/>Late fee <strong>{lkr(record.lateFee)}</strong>
+    {record.waivedFee>0&&<><br/><small>Waived {lkr(record.waivedFee)} · {record.waiverReason}</small></>}
+   </p>
+   {record.lateFee>0&&can(me,'fees.waive')&&<button onClick={()=>setFeeWaiver(record)}>Waive late fee</button>}
+  </div>)}
+ </section>}
  {whatsappUpdates.length>0&&<details className="desk-actions">
   <summary>WhatsApp updates</summary>
   <p className="hint">Review the message in WhatsApp, then press Send.</p>

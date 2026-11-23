@@ -69,8 +69,17 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
  const equipmentFee=money(req.body.damageFee??0,'Equipment damage / loss fee',true);
  const damageFee=money((Math.round(equipmentFee*100)+checklist.reduce((cents,entry)=>cents+Math.round(entry.fee*100),0))/100,'Damage / loss fee',true);
  const settings=await getSettings(session),returnedAt=new Date();
- const late=lateFeeInfo(rental,lines,settings,+returnedAt),waived=money(req.body.waivedFee||0,'Waived fee',true);
- if(waived>late.lateFee)throw httpErr(400,'Waiver exceeds the late fee');if(waived){assertPermission(req.user,'fees.waive');if(!req.body.waiverReason?.trim())throw httpErr(400,'Enter a fee waiver reason');}
+ if(req.body.waiveAllLateFee!==undefined&&typeof req.body.waiveAllLateFee!=='boolean')throw httpErr(400,'Choose whether to waive the full late fee');
+ const late=lateFeeInfo(rental,lines,settings,+returnedAt);
+ if(req.body.expectedLateFee!==undefined&&req.body.waiveAllLateFee!==true
+  &&money(req.body.expectedLateFee,'Expected late fee',true)!==late.lateFee)
+  throw httpErr(409,'The late fee changed. Reopen the return to review the current amount.');
+ const waived=req.body.waiveAllLateFee===true?late.lateFee:money(req.body.waivedFee||0,'Waived fee',true);
+ if(waived>late.lateFee)throw httpErr(400,'Waiver exceeds the late fee');
+ if(waived||req.body.waiveAllLateFee===true){
+  assertPermission(req.user,'fees.waive');
+  if(typeof req.body.waiverReason!=='string'||!req.body.waiverReason.trim())throw httpErr(400,'Enter a fee waiver reason');
+ }
  const lateFee=money(late.lateFee-waived,'Late fee',true);
  const totalAfter=money(order.totalAmount+lateFee+damageFee,'Total',true);
  const netPaid=await paidTotal(order._id,session);
@@ -120,6 +129,46 @@ r.post('/',requirePermission('returns.write'),wrap(async(req,res)=>{
   :'Partial return saved. Remaining equipment is still out.'};
  });
  res.status(201).json({...result,notificationEmail:result._replayed?'already_processed':await sendReturnUpdate(orderId,result,payments)});
+}));
+r.post('/:id/waive-late-fee',requirePermission('fees.waive'),wrap(async(req,res)=>{
+ const result=await mutate(req,'return.waive-late-fee:'+req.params.id,async session=>{
+  const record=await Return.findById(req.params.id).session(session);
+  if(!record)throw httpErr(404,'Return record not found');
+  const rental=await Rental.findById(record.rental).session(session);
+  if(!rental)throw httpErr(404,'Rental not found');
+  const order=await Order.findById(rental.order).session(session);
+  if(!order||order.deletedAt)throw httpErr(404,'Order not found');
+  const body=req.body;
+  if(typeof body.reason!=='string'||!body.reason.trim())throw httpErr(400,'Enter a fee waiver reason');
+  if(body.waiveAll!==undefined&&typeof body.waiveAll!=='boolean')throw httpErr(400,'Choose whether to waive the full late fee');
+  if(typeof body.expectedLateFee!=='number'&&(typeof body.expectedLateFee!=='string'||!body.expectedLateFee.trim()))
+   throw httpErr(400,'Confirm the current late fee');
+  const currentFee=money(record.lateFee??0,'Current late fee',true);
+  if(money(body.expectedLateFee,'Expected late fee',true)!==currentFee)throw httpErr(409,'The late fee changed. Refresh the return before adjusting it.');
+  if(!currentFee)throw httpErr(409,'This return has no remaining late fee to waive');
+  if(body.waiveAll!==true&&typeof body.amount!=='number'&&(typeof body.amount!=='string'||!body.amount.trim()))
+   throw httpErr(400,'Enter the late fee amount to waive');
+  const reduction=body.waiveAll===true?currentFee:money(body.amount,'Late fee waiver');
+  if(reduction>currentFee)throw httpErr(400,'Waiver exceeds the remaining late fee');
+  if(reduction>order.totalAmount)throw httpErr(409,'The order total was already reduced. Review its adjustments first.');
+  const before={lateFee:currentFee,waivedFee:record.waivedFee??0,waiverReason:record.waiverReason,totalAmount:order.totalAmount,status:order.status};
+  record.lateFee=money(currentFee-reduction,'Remaining late fee',true);
+  record.waivedFee=money((record.waivedFee??0)+reduction,'Total late fee waived',true);
+  record.waiverReason=body.reason.trim();
+  order.totalAmount=money(order.totalAmount-reduction,'Adjusted order total',true);
+  await record.save({session});
+  await order.save({session});
+  await syncInvoice(order,session);
+  await closeSettledOrder(order,session);
+  await audit(session,req.user,'return.late_fee_waived',order._id,before,{
+   return:record._id,lateFee:record.lateFee,waivedFee:record.waivedFee,
+   totalAmount:order.totalAmount,status:order.status,amount:reduction,reason:record.waiverReason,
+  });
+  const paid=await paidTotal(order._id,session);
+  return {returnId:record._id,orderId:order._id,lateFee:record.lateFee,waivedFee:record.waivedFee,
+   orderStatus:order.status,refundDue:rentalBalanceDue(paid,order.totalAmount)};
+ });
+ res.json(result);
 }));
 async function pendingOrder(id,session){
  const order=await Order.findById(id).session(session);

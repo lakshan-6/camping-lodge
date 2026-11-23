@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
-import { Order, OrderItem, Customer, Payment, Invoice, AuditEvent } from '../models/index.js';
+import { Order, OrderItem, Customer, Payment, Invoice, AuditEvent, Rental, Return } from '../models/index.js';
 import { httpErr } from '../utils/availability.js';
 import { nextDocumentNumber } from '../utils/documentNumbers.js';
 import { previewOrderDeletion, permanentlyDeleteOrder } from '../utils/orderDeletion.js';
@@ -133,15 +133,17 @@ r.post('/:id/retry-booking-email',requirePermission('orders.write'),emailRetryLi
 }));
 r.get('/:id/detail',wrap(async(req,res)=>{
   const order=await Order.findById(req.params.id).populate('customer').lean();if(!order)throw httpErr(404,'Order not found');
-  const [items,creation]=await Promise.all([
+  const [items,creation,rentals]=await Promise.all([
     OrderItem.find({order:order._id}).populate('equipment','name').lean(),
     AuditEvent.findOne({target:String(order._id),action:'order.created'}).sort({createdAt:1,_id:1}).select('actorName').lean(),
+    Rental.find({order:order._id}).select('_id').lean(),
   ]);
+  const returnFees=await Return.find({rental:{$in:rentals.map(rental=>rental._id)}}).select('returnedAt lateFee waivedFee waiverReason').sort({returnedAt:-1}).lean();
   const showPayments=['finance.view','payments.record','payments.refund'].some(p=>can(req.user,p));
   const emailHistory=(await AuditEvent.find({target:String(order._id),action:{$in:emailActions}}).sort({createdAt:-1,_id:-1}).limit(30).lean())
     .map(({_id,action,after,createdAt})=>({_id,event:action.slice(6),status:after?.status,createdAt}));
   const canRetryBookingEmail=order.status==='reserved'&&can(req.user,'orders.write')&&retryableEmailStatus.includes(emailHistory.find(row=>row.event==='booking')?.status);
-  res.json({...order,placedByName:creation?.actorName?.trim()||null,items,paid:await paidTotal(order._id),securityHeld:await depositHeld(order._id),payments:showPayments?await Payment.find({order:order._id}).sort({paidAt:-1}).lean():[],invoices:await Invoice.find({order:order._id}).lean(),emailHistory,canRetryBookingEmail});
+  res.json({...order,placedByName:creation?.actorName?.trim()||null,items,returnFees,paid:await paidTotal(order._id),securityHeld:await depositHeld(order._id),payments:showPayments?await Payment.find({order:order._id}).sort({paidAt:-1}).lean():[],invoices:await Invoice.find({order:order._id}).lean(),emailHistory,canRetryBookingEmail});
 }));
 r.get('/:id/past-delete-preview',ownerOnly,wrap(async(req,res)=>res.json(await previewOrderDeletion(req.params.id))));
 r.delete('/:id/past',ownerOnly,limit,wrap(async(req,res)=>{

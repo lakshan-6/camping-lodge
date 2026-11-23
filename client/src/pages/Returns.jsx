@@ -6,6 +6,7 @@ import {SecurityStatus} from '../components/SecurityDeposit.jsx';
 import OrderWorkspace from '../components/OrderWorkspace.jsx';
 import {emailStatusMessage} from '../emailStatus.js';
 import SettlementDialog from '../components/SettlementDialog.jsx';
+import LateFeeWaiverDialog from '../components/LateFeeWaiverDialog.jsx';
 const fmt=d=>new Date(d).toLocaleString('en-LK',{timeZone:'Asia/Colombo',dateStyle:'medium',timeStyle:'short'});
 const hasEquipmentIssue=items=>items.some(item=>Number(item.quantityDamaged)>0||Number(item.quantityLost)>0);
 const amountDue=(amount,credit=0)=>Math.max(0,Math.round((amount-credit)*100)/100);
@@ -25,7 +26,7 @@ function PhysicalReturnDialog({rental,order,me,onClose,onSaved}){
   let active=true;
   async function loadPreview(){try{
    const preview=await api(rental?'/returns/preview/'+rental._id:'/returns/preview/order/'+order._id);
-   if(active)setForm({preview,returnNic:false,items:preview.items.map(i=>({equipment:i.equipment._id,name:i.equipment.name,remaining:i.remaining,trackUnits:i.equipment.trackUnits,units:(i.unitAssignments||[]).filter(u=>u.outcome==='out').map(u=>({unit:u.unit,code:u.code,condition:'good'})),quantityReturned:i.remaining,quantityDamaged:0,quantityLost:0})),checklist:(preview.checklist||[]).map(c=>({...c,checked:false,missing:false,fee:''})),damageFee:0,waivedFee:0,waiverReason:'',notes:'',paid:{balance:false,late:false,damage:false},method:'',requestId:crypto.randomUUID()});}catch(x){if(active)setError(x.message);}}
+   if(active)setForm({preview,returnNic:false,items:preview.items.map(i=>({equipment:i.equipment._id,name:i.equipment.name,remaining:i.remaining,trackUnits:i.equipment.trackUnits,units:(i.unitAssignments||[]).filter(u=>u.outcome==='out').map(u=>({unit:u.unit,code:u.code,condition:'good'})),quantityReturned:i.remaining,quantityDamaged:0,quantityLost:0})),checklist:(preview.checklist||[]).map(c=>({...c,checked:false,missing:false,fee:''})),damageFee:0,waiveAllLateFee:false,waivedFee:0,waiverReason:'',notes:'',paid:{balance:false,late:false,damage:false},method:'',requestId:crypto.randomUUID()});}catch(x){if(active)setError(x.message);}}
   loadPreview();return ()=>{active=false;};
  },[rental?._id,order?._id]);
  function updateItems(items){
@@ -39,7 +40,7 @@ function PhysicalReturnDialog({rental,order,me,onClose,onSaved}){
   setForm({...form,checklist:form.checklist.map((entry,n)=>index===n?{...entry,...changes}:entry)});
  }
  const canRecordPayment=can(me,'payments.record');
- const lateFee=form?amountDue(form.preview.lateFee,Number(form.waivedFee)):0;
+ const lateFee=form&&!form.waiveAllLateFee?amountDue(form.preview.lateFee,Number(form.waivedFee)):0;
  const accessoryFee=form?form.checklist.reduce((cents,entry)=>entry.missing?cents+Math.round(Number(entry.fee)*100):cents,0)/100:0;
  const damageFee=form?(Math.round(Number(form.damageFee)*100)+Math.round(accessoryFee*100))/100:0;
  const paymentCredit=form?.preview.paymentCredit??0;
@@ -56,7 +57,7 @@ function PhysicalReturnDialog({rental,order,me,onClose,onSaved}){
   try{
    const paid=Object.fromEntries(paymentOptions.map(([key])=>[key,complete?paymentConfirmed:form.paid[key]]));
    const confirmedAmounts=Object.fromEntries(paymentOptions.filter(([key])=>paid[key]).map(([key,,amount])=>[key+'PaymentAmount',amount]));
-   const result=await api('/returns',{method:'POST',body:{...form,paid,...confirmedAmounts,items:form.items.map(i=>({...i,units:i.trackUnits?i.units.filter(u=>u.condition!=='out'):undefined})),returnNic:complete&&form.returnNic,rental:rental?._id??form.preview.rentalId,damageFee:Number(form.damageFee),waivedFee:Number(form.waivedFee),deferSettlement:true}});
+   const result=await api('/returns',{method:'POST',body:{...form,paid,...confirmedAmounts,items:form.items.map(i=>({...i,units:i.trackUnits?i.units.filter(u=>u.condition!=='out'):undefined})),returnNic:complete&&form.returnNic,rental:rental?._id??form.preview.rentalId,damageFee:Number(form.damageFee),waivedFee:Number(form.waivedFee),expectedLateFee:form.preview.lateFee,deferSettlement:true}});
    onSaved(`${result.emailNote} ${emailStatusMessage(result.notificationEmail)}`.trim(),result.orderStatus);
   }catch(x){setError(x.message);}finally{setBusy(false);}
  }
@@ -108,11 +109,19 @@ function PhysicalReturnDialog({rental,order,me,onClose,onSaved}){
    </label>}
   </div>
  </details>
- {form.preview.lateFee>0&&can(me,'fees.waive')&&<details className="desk-actions" onInvalid={e=>{e.currentTarget.open=true;}}>
-  <summary>Late fee adjustment</summary>
-  <label>Late fee to waive (LKR)<input type="number" min="0" max={form.preview.lateFee} step="0.01" value={form.waivedFee} onChange={e=>setForm({...form,waivedFee:e.target.value})}/></label>
-  {Number(form.waivedFee)>0&&<label>Waiver reason<input required value={form.waiverReason} onChange={e=>setForm({...form,waiverReason:e.target.value})}/></label>}
- </details>}
+ {form.preview.lateFee>0&&<section className="card" aria-labelledby="return-late-fee-title">
+  <h3 id="return-late-fee-title">Late fee · {lkr(form.preview.lateFee)}</h3>
+  {can(me,'fees.waive')&&<>
+   <label className="check"><input type="checkbox" checked={form.waiveAllLateFee} onChange={e=>setForm({...form,waiveAllLateFee:e.target.checked,waivedFee:0,confirmedTotal:null})}/>Waive full late fee</label>
+   <p className="hint">For an on-time return entered later, waive the fee and record the reason.</p>
+   {!form.waiveAllLateFee&&<details className="desk-actions" onInvalid={e=>{e.currentTarget.open=true;}}>
+    <summary>Waive part of the fee</summary>
+    <label>Amount to waive (LKR)<input type="number" min="0" max={form.preview.lateFee} step="0.01" value={form.waivedFee} onChange={e=>setForm({...form,waivedFee:e.target.value,confirmedTotal:null})}/></label>
+   </details>}
+   {(form.waiveAllLateFee||Number(form.waivedFee)>0)&&<label>Waiver reason<input required maxLength={500} placeholder="Returned on time, recorded later" value={form.waiverReason} onChange={e=>setForm({...form,waiverReason:e.target.value})}/></label>}
+  </>}
+  <p>Late fee to charge <strong>{lkr(lateFee)}</strong></p>
+ </section>}
  <section className="card">
   <p className="rental-balance-due">Total due <strong>{lkr(totalDue)}</strong></p>
   {complete&&totalDue>0&&canRecordPayment&&<label className="check"><input type="checkbox" checked={paymentConfirmed} onChange={e=>setForm({...form,confirmedTotal:e.target.checked?totalDue:null})}/>Payment received · {lkr(totalDue)}</label>}
@@ -133,13 +142,40 @@ function PhysicalReturnDialog({rental,order,me,onClose,onSaved}){
 export default function Returns({me}){
  const [out,setOut]=useState([]),[done,setDone]=useState([]),[selected,setSelected]=useState(null),[error,setError]=useState(''),[workspace,setWorkspace]=useState(null),[notice,setNotice]=useState('');
  const [pending,setPending]=useState([]),[settling,setSettling]=useState(null);
+ const [feeWaiver,setFeeWaiver]=useState(null);
  const load=()=>{api('/rentals?status=out').then(setOut).catch(e=>setError(e.message));api('/returns').then(setDone).catch(e=>setError(e.message));api('/orders?status=settlement_pending').then(setPending).catch(e=>setError(e.message));};useEffect(load,[]);
  function saved(message){setSelected(null);setSettling(null);setNotice(message);load();}
- return <>{error&&<p className="bad">{error}</p>}{notice&&<p className="notice" role="status">{notice}</p>}<h3>Waiting to be returned</h3><div className="tablewrap"><ResponsiveTable><thead><tr><th>Order</th><th>Customer</th><th>Due back</th><th>Remaining items</th><th></th></tr></thead><tbody>{out.map(r=><tr key={r._id}><td>{r.order?.orderNo}</td><td>{r.customer?.name}</td><td>{fmt(r.dueDate)} {r.overdue&&<b className="bad">Overdue</b>}</td><td>{r.items.filter(i=>i.remaining>0).map(i=>`${i.remaining}× ${i.equipment?.name}`).join(', ')}</td><td>{can(me,'returns.write')&&<button onClick={()=>setSelected(r)}>Receive return</button>}</td></tr>)}</tbody></ResponsiveTable></div><h3>Return history</h3><div className="tablewrap"><ResponsiveTable><thead><tr><th>Order</th><th>Returned</th><th>Type</th><th>Late fee</th><th>Damage / loss fee</th><th>Security</th><th></th></tr></thead><tbody>{done.map(r=><tr key={r._id}><td>{r.rental?.order?.orderNo}</td><td>{fmt(r.returnedAt)}</td><td>{r.partial?'Partial':'Complete'}</td><td>{lkr(r.lateFee)}</td><td>{lkr(r.damageFee)}{r.checklist?.filter(item=>item.missing).map(item=><small key={item.key??item.label}>{item.label} · Missing{item.fee>0&&` · ${lkr(item.fee)}`}</small>)}</td><td><SecurityStatus order={r.rental?.order}/></td><td>{r.rental?.order&&<button onClick={()=>setWorkspace(r.rental.order._id)}>View order</button>}</td></tr>)}</tbody></ResponsiveTable></div>
+ return <>
+ {error&&<p className="bad">{error}</p>}
+ {notice&&<p className="notice" role="status">{notice}</p>}
+ <h3>Waiting to be returned</h3>
+ <div className="tablewrap"><ResponsiveTable>
+  <thead><tr><th>Order</th><th>Customer</th><th>Due back</th><th>Remaining items</th><th></th></tr></thead>
+  <tbody>{out.map(r=><tr key={r._id}>
+   <td>{r.order?.orderNo}</td><td>{r.customer?.name}</td>
+   <td>{fmt(r.dueDate)} {r.overdue&&<b className="bad">Overdue</b>}</td>
+   <td>{r.items.filter(i=>i.remaining>0).map(i=>`${i.remaining}× ${i.equipment?.name}`).join(', ')}</td>
+   <td>{can(me,'returns.write')&&<button onClick={()=>setSelected(r)}>Receive return</button>}</td>
+  </tr>)}</tbody>
+ </ResponsiveTable></div>
+ <h3>Return history</h3>
+ <div className="tablewrap"><ResponsiveTable>
+  <thead><tr><th>Order</th><th>Returned</th><th>Type</th><th>Late fee</th><th>Damage / loss fee</th><th>Security</th><th></th></tr></thead>
+  <tbody>{done.map(record=><tr key={record._id}>
+   <td>{record.rental?.order?.orderNo}</td><td>{fmt(record.returnedAt)}</td><td>{record.partial?'Partial':'Complete'}</td>
+   <td>{lkr(record.lateFee)}{record.waivedFee>0&&<small>Waived {lkr(record.waivedFee)} · {record.waiverReason}</small>}</td>
+   <td>{lkr(record.damageFee)}{record.checklist?.filter(item=>item.missing).map(item=><small key={item.key??item.label}>{item.label} · Missing{item.fee>0&&` · ${lkr(item.fee)}`}</small>)}</td>
+   <td><SecurityStatus order={record.rental?.order}/></td>
+   <td>{record.rental?.order&&<button onClick={()=>setWorkspace(record.rental.order._id)}>View order</button>}
+    {record.lateFee>0&&can(me,'fees.waive')&&<button onClick={()=>setFeeWaiver(record)}>Waive late fee</button>}
+   </td>
+  </tr>)}</tbody>
+ </ResponsiveTable></div>
  {pending.length>0&&<section><h3>Settlement pending</h3><div className="tablewrap"><ResponsiveTable>
  <thead><tr><th>Order</th><th>Customer</th><th></th></tr></thead><tbody>{pending.map(order=><tr key={order._id}><td>{order.orderNo}</td><td>{order.customer?.name}</td><td>{can(me,'returns.write')&&<button onClick={()=>setSettling(order)}>Complete settlement</button>}</td></tr>)}</tbody>
  </ResponsiveTable></div></section>}
  {workspace&&<OrderWorkspace id={workspace} me={me} onClose={()=>setWorkspace(null)} onSaved={load}/>}
+ {feeWaiver&&<LateFeeWaiverDialog record={feeWaiver} orderNo={feeWaiver.rental?.order?.orderNo} onClose={()=>{setFeeWaiver(null);load();}} onSaved={message=>{setFeeWaiver(null);saved(message);}}/>}
  {selected&&<ReturnDialog rental={selected} me={me} onClose={()=>setSelected(null)} onSaved={saved}/>}
  {settling&&<SettlementDialog order={settling} me={me} onClose={()=>setSettling(null)} onSaved={saved}/>}</>;
 }
