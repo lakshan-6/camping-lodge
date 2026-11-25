@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { Order,Payment,DepositTransaction } from '../models/index.js';
+import { Order,OrderItem,Payment,DepositTransaction } from '../models/index.js';
 import { httpErr } from '../utils/availability.js';
 import { mutate,audit } from '../utils/operations.js';
 import { can,requirePermission } from '../utils/permissions.js';
@@ -14,6 +14,8 @@ r.get('/summary',requirePermission('finance.view'),wrap(async(req,res)=>{
 }));
 r.get('/balances',financeView,wrap(async(req,res)=>{
  const orders=await Order.find({deletedAt:null}).sort({createdAt:-1}).populate('customer','name phone').lean(),out=[];
+ const rentalLines=await OrderItem.find({order:{$in:orders.map(order=>order._id)},itemType:{$ne:'sale'}}).select('order').lean();
+ const rentalOrders=new Set(rentalLines.map(line=>String(line.order)));
  const actions=await cancellationActions(orders);
  for(const order of orders){
   const paid=await paidTotal(order._id),held=await depositHeld(order._id);
@@ -21,7 +23,7 @@ r.get('/balances',financeView,wrap(async(req,res)=>{
   const balance=order.status==='cancelled'?0:Math.round((order.totalAmount-paid)*100)/100;
   let refundDue=Math.max(0,-balance);
   if(order.status==='cancelled'&&actions.get(String(order._id))!=='keep')refundDue=Math.max(0,paid);
-  out.push({...order,paid,balance,refundDue,securityHeld:held});
+  out.push({...order,hasRentalItems:rentalOrders.has(String(order._id)),paid,balance,refundDue,securityHeld:held});
  }
  res.json(out);
 }));

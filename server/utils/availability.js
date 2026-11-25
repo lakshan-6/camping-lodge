@@ -43,7 +43,7 @@ export async function availability(start, end, excludeOrder, session = null) {
     const from=Math.max(+start,+order.startDate),to=Math.min(+end,until);
     if(from<to)windows.set(String(order._id),[from,to]);
   }
-  const lines=windows.size?await OrderItem.find({order:{$in:[...windows.keys()]}}).select('order equipment quantity returnedQuantity').session(session):[];
+  const lines=windows.size?await OrderItem.find({order:{$in:[...windows.keys()]},itemType:{$ne:'sale'}}).select('order equipment quantity returnedQuantity').session(session):[];
   const events=new Map();
   for(const line of lines){
     const quantity=line.quantity-(line.returnedQuantity||0);
@@ -53,8 +53,13 @@ export async function availability(start, end, excludeOrder, session = null) {
     events.get(key).push([from,quantity],[to,-quantity]);
   }
   const items = await Equipment.find({ active: true }).sort({ category: 1, name: 1 }).session(session);
+  const saleOrders=await Order.find({status:'reserved'}).select('_id').session(session);
+  const saleIds=saleOrders.filter(order=>String(order._id)!==String(excludeOrder)).map(order=>order._id);
+  const saleLines=saleIds.length?await OrderItem.find({order:{$in:saleIds},itemType:'sale'}).select('equipment quantity').session(session):[];
+  const salesReserved=new Map();
+  for(const line of saleLines){const id=String(line.equipment);salesReserved.set(id,(salesReserved.get(id)||0)+line.quantity);}
   return items.map(i => {
-    const b = peakQuantity(events.get(String(i._id))||[]);
+    const b = i.itemType==='sale'?(salesReserved.get(String(i._id))||0):peakQuantity(events.get(String(i._id))||[]);
     return { ...i.toObject(), booked: b, available: Math.max(0, i.totalQuantity - i.damagedQty - b) };
   });
 }

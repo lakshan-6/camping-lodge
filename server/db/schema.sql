@@ -92,6 +92,8 @@ CREATE TABLE "equipment" (
   "name" text NOT NULL,
   "category" text NOT NULL,
   "sku" text,
+  "itemType" text CHECK ("itemType" IN ('rental','sale')),
+  "sellingPrice" numeric(16,2) CHECK ("sellingPrice" >= 0),
   "totalQuantity" bigint NOT NULL CHECK ("totalQuantity" >= 0),
   "periodRate" numeric(16,2) NOT NULL CHECK ("periodRate" >= 0),
   "deposit" numeric(16,2) CHECK ("deposit" >= 0),
@@ -147,7 +149,7 @@ CREATE INDEX "expenses_repair_idx" ON "expenses" ("repair");
 
 CREATE TABLE "inventory_transactions" (
   "equipment" text NOT NULL,
-  "type" text NOT NULL CHECK ("type" IN ('initial_stock','adjustment','rented_out','returned','damaged','lost','repaired')),
+  "type" text NOT NULL CHECK ("type" IN ('initial_stock','adjustment','rented_out','sold','returned','damaged','lost','repaired')),
   "quantity" bigint NOT NULL,
   "reference" text,
   "note" text,
@@ -191,6 +193,7 @@ CREATE TABLE "orders" (
   "customer" text NOT NULL,
   "pickupDate" text,
   "plannedReturnDate" text,
+  "fulfilledAt" timestamptz,
   "startDate" timestamptz NOT NULL,
   "endDate" timestamptz NOT NULL,
   "status" text CHECK ("status" IN ('reserved','active','settlement_pending','completed','cancelled')),
@@ -230,6 +233,7 @@ CREATE TABLE "order_items" (
   "order" text NOT NULL,
   "equipment" text NOT NULL,
   "quantity" bigint NOT NULL CHECK ("quantity" >= 1),
+  "itemType" text CHECK ("itemType" IN ('rental','sale')),
   "periodRate" numeric(16,2) NOT NULL,
   "periods" bigint NOT NULL CHECK ("periods" >= 1),
   "lineTotal" numeric(16,2) NOT NULL,
@@ -248,13 +252,15 @@ CREATE TABLE "payments" (
   "order" text NOT NULL,
   "invoice" text,
   "amount" numeric(16,2) NOT NULL CHECK ("amount" >= 0),
+  "saleAmount" numeric(16,2) CHECK ("saleAmount" >= 0),
   "method" text CHECK ("method" IN ('cash','bank_transfer','card','other')),
   "type" text CHECK ("type" IN ('deposit','rental','balance','refund','fee')),
   "paidAt" timestamptz,
   "reference" text,
   "_id" text PRIMARY KEY CHECK ("_id" ~ '^[a-f0-9]{24}$'),
   "createdAt" timestamptz,
-  "updatedAt" timestamptz
+  "updatedAt" timestamptz,
+  CONSTRAINT payments_sale_amount_check CHECK ("saleAmount" <= "amount")
 );
 
 CREATE INDEX "payments_order_idx" ON "payments" ("order");

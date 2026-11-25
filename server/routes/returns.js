@@ -177,7 +177,8 @@ async function pendingOrder(id,session){
 }
 r.get('/settlement/:order',requirePermission('returns.write'),wrap(async(req,res)=>{
  const order=await pendingOrder(req.params.order);
- res.json({orderNo:order.orderNo,balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),depositHeld:await depositHeld(order._id),nicHeld:nicHeld(order)});
+ const hasRentalItems=await OrderItem.exists({order:order._id,itemType:{$ne:'sale'}});
+ res.json({orderNo:order.orderNo,hasRentalItems:!!hasRentalItems,balance:rentalBalanceDue(order.totalAmount,await paidTotal(order._id)),depositHeld:await depositHeld(order._id),nicHeld:nicHeld(order)});
 }));
 r.post('/settlement/:order',requirePermission('returns.write'),wrap(async(req,res)=>{
  let payment;

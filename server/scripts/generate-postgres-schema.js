@@ -17,6 +17,7 @@ for(const d of Object.values(definitions)){
  if(d.name==='Equipment')columns.push('CHECK ("damagedQty" <= "totalQuantity")');
  if(d.name==='Order')columns.push('CHECK ("endDate" > "startDate")');
  if(d.name==='OrderItem')columns.push('CHECK ("returnedQuantity" <= "quantity")');
+ if(d.name==='Payment')columns.push('CONSTRAINT payments_sale_amount_check CHECK ("saleAmount" <= "amount")');
  ddl.push(`CREATE TABLE ${q(d.table)} (\n  ${columns.join(',\n  ')}\n);`);
  for(const [key,f]of Object.entries(d.fields)){
   if(f.path.options.unique)ddl.push(`CREATE UNIQUE INDEX ${q(d.table+'_'+key+'_unique')} ON ${q(d.table)} (${q(key)});`);

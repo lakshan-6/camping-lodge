@@ -4,7 +4,7 @@ export function validateUnitBackup(c){
  const eqs=new Map(c.Equipment.map(e=>[String(e._id),e])),units=new Map(c.EquipmentUnit.map(u=>[String(u._id),u])),rentals=new Map(c.Rental.map(r=>[String(r._id),r]));
  const codes=new Set();
  for(const unit of units.values()){
-  const eq=eqs.get(String(unit.equipment));if(!eq?.trackUnits||codes.has(unit.code))throw httpErr(400,'Invalid or duplicate equipment unit in backup');codes.add(unit.code);
+  const eq=eqs.get(String(unit.equipment));if(!eq||!eq.trackUnits&&!['lost','retired'].includes(unit.state)||codes.has(unit.code))throw httpErr(400,'Invalid or duplicate equipment unit in backup');codes.add(unit.code);
   if(unit.state==='out'){
    const rental=rentals.get(String(unit.rental));
    if(!rental||!['out','overdue'].includes(rental.status)||!c.OrderItem.some(l=>String(l.order)===String(rental.order)&&String(l.equipment)===String(unit.equipment)&&(l.unitAssignments||[]).some(a=>String(a.unit)===String(unit._id)&&a.outcome==='out')))throw httpErr(400,'Broken outstanding unit allocation in backup');

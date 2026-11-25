@@ -12,7 +12,7 @@ export function PickupDialog({order,me,onClose,onSaved}){
  const [hand,setHand]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  useEffect(()=>{
   let active=true;
-  async function loadPreview(){try{const preview=await api('/rentals/pickup-preview/'+order._id);const depositDue=Math.max(0,Math.round((preview.depositAmount-preview.securityHeld)*100)/100);if(active)setHand({order,preview,securityMethod:preview.securityMethod??'',nicReceived:false,securityDeposit:{received:false,amount:preview.securityMethod?(depositDue||''):'',method:'cash'},unitSelections:preview.items.filter(i=>i.equipment.trackUnits).map(i=>({equipment:i.equipment._id,units:[]})),paymentReceived:false,paymentAmount:'',paymentMethod:'',requestId:crypto.randomUUID(),checklist:preview.checklist||[]});}catch(e){if(active)setError(e.message);}}
+  async function loadPreview(){try{const preview=await api('/rentals/pickup-preview/'+order._id);const depositDue=Math.max(0,Math.round((preview.depositAmount-preview.securityHeld)*100)/100);if(active)setHand({order,preview,securityMethod:preview.securityMethod??'',nicReceived:false,securityDeposit:{received:false,amount:preview.securityMethod?(depositDue||''):'',method:'cash'},unitSelections:preview.items.filter(i=>i.itemType!=='sale'&&i.equipment.trackUnits).map(i=>({equipment:i.equipment._id,units:[]})),paymentReceived:false,paymentAmount:'',paymentMethod:'',requestId:crypto.randomUUID(),checklist:preview.checklist||[]});}catch(e){if(active)setError(e.message);}}
   loadPreview();return ()=>{active=false;};
  },[order._id]);
  function selectUnit(equipment,unit,checked){
@@ -21,30 +21,39 @@ export function PickupDialog({order,me,onClose,onSaved}){
   setHand({...hand,unitSelections:hand.unitSelections.map(s=>s.equipment===equipment?{...s,units}:s),
    checklist:hand.checklist.map(c=>c.equipment===equipment&&previous[c.unitIndex]!==units[c.unitIndex]?{...c,checked:false}:c)});
  }
+ const hasRentalItems=hand?.preview.hasRentalItems??hand?.preview.items.some(item=>item.itemType!=='sale');
  async function start(e){
   e.preventDefault();if(busy)return;setBusy(true);setError('');
   try{
    const rentalPayment=hand.paymentReceived?{amount:Number(hand.paymentAmount),method:hand.paymentMethod}:undefined;
    const checklist=hand.checklist.filter(c=>c.checked).map(({key,label,checked})=>({key,label,checked}));
-   const result=await api('/rentals/start',{method:'POST',body:{order:hand.order._id,rentalPayment,sendVia:'none',checklist,securityMethod:hand.securityMethod,nicReceived:hand.nicReceived,securityDeposit:hand.securityMethod==='money'?hand.securityDeposit:undefined,unitSelections:hand.unitSelections,requestId:hand.requestId}});
-   onSaved(`Pickup saved. Due back ${fmt(result.dueDate)} (Sri Lanka time). ${result.emailNote||emailStatusMessage(result.notificationEmail)}`.trim());
+   const result=await api('/rentals/start',{method:'POST',body:{order:hand.order._id,rentalPayment,sendVia:'none',requestId:hand.requestId,
+    ...(hasRentalItems?{checklist,securityMethod:hand.securityMethod,nicReceived:hand.nicReceived,securityDeposit:hand.securityMethod==='money'?hand.securityDeposit:undefined,unitSelections:hand.unitSelections}:{})}});
+   const note=result.saleOnly
+    ?`Sale handed over. ${result.orderStatus==='completed'?'Order completed.':'Payment settlement is pending.'}`
+    :`Pickup saved. Rental items due back ${fmt(result.dueDate)} (Sri Lanka time).`;
+   onSaved(`${note} ${result.emailNote||emailStatusMessage(result.notificationEmail)}`.trim());
   }catch(x){setError(x.message);}finally{setBusy(false);}
  }
  const remainingBalance=hand&&Math.max(0,Math.round((hand.preview.balance-Number(hand.paymentAmount))*100)/100);
  if(!hand)return <div className="modal" key="loading-pickup"><div className="workspace"><h2>Hand over {order.orderNo}</h2>{error?<p className="bad" role="alert">{error}</p>:<p role="status">Loading pickup…</p>}<button onClick={onClose}>Close</button></div></div>;
- return <div className="modal"><form onSubmit={start}><h2>Hand over {order.orderNo}</h2><p>{hand.order.customer?.name}</p><p>The return time starts from this handover. Availability is checked again before saving.</p>
+ return <div className="modal"><form onSubmit={start}><h2>Hand over {order.orderNo}</h2><p>{hand.order.customer?.name}</p>
+ {hasRentalItems&&<p>The rental return time starts from this handover.</p>}
+ <section className="card"><h3>Items to hand over</h3>{hand.preview.items.map(item=><p key={item._id}>
+  <b>{item.quantity} × {item.equipment.name}</b> · {item.itemType==='sale'?'Sale':'Rental'}
+ </p>)}</section>
  <section className="card">
-  <p className="rental-balance-due">Rental balance due <strong>{lkr(hand.preview.balance)}</strong></p>
+  <p className="rental-balance-due">Order balance due <strong>{lkr(hand.preview.balance)}</strong></p>
   {hand.preview.balance>0&&can(me,'payments.record')&&<>
-   <label className="check"><input type="checkbox" checked={hand.paymentReceived} onChange={e=>setHand({...hand,paymentReceived:e.target.checked})}/>I received a rental payment at pickup</label>
+   <label className="check"><input type="checkbox" checked={hand.paymentReceived} onChange={e=>setHand({...hand,paymentReceived:e.target.checked})}/>I received a payment at handover</label>
    {hand.paymentReceived?<><div className="row">
     <label>Amount received (LKR)<input required type="number" min="0" max={hand.preview.balance} step="0.01" value={hand.paymentAmount} onChange={e=>setHand({...hand,paymentAmount:e.target.value})}/></label>
-    <label>Rental payment method<select required={Number(hand.paymentAmount)>0} disabled={Number(hand.paymentAmount)<=0} value={hand.paymentMethod} onChange={e=>setHand({...hand,paymentMethod:e.target.value})}><option value="">Choose payment method</option><option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option><option value="other">Other</option></select></label>
-   </div><button type="button" onClick={()=>setHand({...hand,paymentAmount:String(hand.preview.balance)})}>Use full balance</button>{hand.paymentAmount!==''&&Number(hand.paymentAmount)>=0&&Number(hand.paymentAmount)<=hand.preview.balance&&<p>Remaining rental balance <strong>{lkr(remainingBalance)}</strong></p>}</>:
-   <p className="hint">Leave unchecked if the customer will pay the balance at return.</p>}
+    <label>Payment method<select required={Number(hand.paymentAmount)>0} disabled={Number(hand.paymentAmount)<=0} value={hand.paymentMethod} onChange={e=>setHand({...hand,paymentMethod:e.target.value})}><option value="">Choose payment method</option><option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option><option value="other">Other</option></select></label>
+   </div><button type="button" onClick={()=>setHand({...hand,paymentAmount:String(hand.preview.balance)})}>Use full balance</button>{hand.paymentAmount!==''&&Number(hand.paymentAmount)>=0&&Number(hand.paymentAmount)<=hand.preview.balance&&<p>Remaining balance <strong>{lkr(remainingBalance)}</strong></p>}</>:
+   <p className="hint">{hasRentalItems?'Leave unchecked if the customer will pay the balance at return.':'Leave unchecked to keep the unpaid balance in Settlement pending.'}</p>}
   </>}
  </section>
- <section className="card security-card">
+ {hasRentalItems&&<section className="card security-card">
  <h3>Security deposit</h3>
  <label>Security type<select required value={hand.securityMethod} disabled={hand.preview.nicHeld||hand.preview.securityHeld>0}
  onChange={e=>setHand({...hand,securityMethod:e.target.value,nicReceived:false,securityDeposit:{...hand.securityDeposit,received:false}})}>
@@ -62,9 +71,9 @@ export function PickupDialog({order,me,onClose,onSaved}){
  </>:hand.preview.securityHeld<=0&&<p>A staff member with payment access must confirm a money deposit.</p>}
  </>}
  <p className="hint">Rental payments are separate from the security deposit.</p>
- </section>
- {hand.preview.items.filter(i=>i.equipment.trackUnits).map(i=>{const selected=hand.unitSelections.find(s=>s.equipment===i.equipment._id)?.units||[];return <fieldset className="unit-picker" key={i._id}><legend>{i.equipment.name} · choose {i.quantity} unit codes</legend><p>{selected.length} of {i.quantity} selected. Match these codes to the labels on the equipment.</p><div className="unit-grid">{i.availableUnits.map(u=><label className="check unit-choice" key={u._id}><input type="checkbox" checked={selected.includes(u._id)} disabled={!selected.includes(u._id)&&selected.length>=i.quantity} onChange={e=>selectUnit(i.equipment._id,u._id,e.target.checked)}/><b>{u.code}</b></label>)}</div>{i.availableUnits.length<i.quantity&&<p className="bad">Not enough labelled units are ready. Check inventory.</p>}</fieldset>;})}
- {hand.checklist.length>0&&<><h3>Handover checklist</h3><p className="hint">Tick the accessories handed to the customer.</p>{hand.checklist.map((c,i)=>{
+ </section>}
+ {hasRentalItems&&hand.preview.items.filter(i=>i.itemType!=='sale'&&i.equipment.trackUnits).map(i=>{const selected=hand.unitSelections.find(s=>s.equipment===i.equipment._id)?.units||[];return <fieldset className="unit-picker" key={i._id}><legend>{i.equipment.name} · choose {i.quantity} unit codes</legend><p>{selected.length} of {i.quantity} selected. Match these codes to the labels on the equipment.</p><div className="unit-grid">{i.availableUnits.map(u=><label className="check unit-choice" key={u._id}><input type="checkbox" checked={selected.includes(u._id)} disabled={!selected.includes(u._id)&&selected.length>=i.quantity} onChange={e=>selectUnit(i.equipment._id,u._id,e.target.checked)}/><b>{u.code}</b></label>)}</div>{i.availableUnits.length<i.quantity&&<p className="bad">Not enough labelled units are ready. Check inventory.</p>}</fieldset>;})}
+ {hasRentalItems&&hand.checklist.length>0&&<><h3>Handover checklist</h3><p className="hint">Tick the accessories handed to the customer.</p>{hand.checklist.map((c,i)=>{
   const selected=hand.unitSelections.find(s=>s.equipment===c.equipment)?.units[c.unitIndex];
   const code=hand.preview.items.find(item=>item.equipment._id===c.equipment)?.availableUnits.find(unit=>unit._id===selected)?.code;
   if(!code&&hand.unitSelections.some(s=>s.equipment===c.equipment))return null;
@@ -92,7 +101,7 @@ export function ExtendDialog({order,rental,onClose,onSaved}){
   }catch(e){setError(e.message);}finally{setBusy(false);}
  }
  if(!activeRental)return <div className="modal" key="loading-extension"><div className="workspace"><h2>Extend {order?.orderNo}</h2>{error?<p className="bad" role="alert">{error}</p>:<p role="status">Loading rental…</p>}<button onClick={onClose}>Close</button></div></div>;
- return <div className="modal"><form onSubmit={extend}><h2>Extend {activeRental.order?.orderNo}</h2><p>Current due: {fmt(activeRental.dueDate)}. Each extra period is 36 hours. Conflicting bookings will block the extension.</p><label>Extra periods<input required type="number" min="1" max="30" step="1" value={periods} onChange={e=>setPeriods(e.target.value)}/></label><p>Extra-period estimate: {lkr(activeRental.items.reduce((s,i)=>s+i.remaining*i.periodRate,0)*Number(periods))}</p><p>Overdue charges, after the grace period, are added when saving.</p>
+ return <div className="modal"><form onSubmit={extend}><h2>Extend {activeRental.order?.orderNo}</h2><p>Current due: {fmt(activeRental.dueDate)}. Each extra period is 36 hours. Conflicting bookings will block the extension.</p><label>Extra periods<input required type="number" min="1" max="30" step="1" value={periods} onChange={e=>setPeriods(e.target.value)}/></label><p>Extra-period estimate: {lkr(activeRental.items.filter(i=>i.itemType!=='sale').reduce((s,i)=>s+i.remaining*i.periodRate,0)*Number(periods))}</p><p>Overdue charges, after the grace period, are added when saving.</p>
   {error&&<p className="bad" role="alert">{error}</p>}
   <div className="bar"><button type="button" disabled={busy} onClick={onClose}>Close</button><button className="btn" disabled={busy}>{busy?'Saving…':'Confirm extension'}</button></div>
  </form></div>;
@@ -102,7 +111,7 @@ export default function Rentals({me}){
  const [ready,setReady]=useState([]),[out,setOut]=useState([]),[pickup,setPickup]=useState(null),[extend,setExtend]=useState(null),[error,setError]=useState(''),[details,setDetails]=useState(null),[editing,setEditing]=useState(null),[notice,setNotice]=useState('');
  const load=()=>{api('/orders?status=reserved&pickupBalances=true').then(setReady).catch(e=>setError(e.message));api('/rentals?status=out').then(setOut).catch(e=>setError(e.message));};
  useEffect(load,[]);
- const itemList=items=>items.map(i=>`${i.remaining??i.quantity}× ${i.equipment?.name}`).join(', ');
+ const itemList=items=>items.map(i=>`${i.remaining??i.quantity}× ${i.equipment?.name}${i.itemType==='sale'?' (sale)':''}`).join(', ');
  return <>{error&&!extend&&<p className="bad">{error}</p>}{notice&&<p className="notice" role="status">{notice}</p>}<h3>Ready for pickup</h3><div className="tablewrap"><ResponsiveTable><thead><tr><th>Order</th><th>Customer</th><th>Booked pickup</th><th>Items</th><th>Balance</th><th></th></tr></thead><tbody>{ready.map(o=><tr key={o._id}><td>{o.orderNo}</td><td>{o.customer?.name}{o.customer?.detailsPending&&<small>Details pending</small>}</td><td>{formatPickup(o)}</td><td>{itemList(o.items)}</td><td>{o.balance == null ? '—' : lkr(o.balance)}</td><td>{o.customer?.detailsPending&&can(me,'customers.write')&&<button onClick={()=>setDetails(o.customer)}>Add details</button>}{can(me,'orders.write')&&<button onClick={()=>setEditing(o)}>Change booking</button>}{can(me,'rentals.write')&&<button className="btn" onClick={()=>setPickup(o)}>Start pickup</button>}</td></tr>)}</tbody></ResponsiveTable></div>
  <h3>Out now</h3><div className="tablewrap"><ResponsiveTable><thead><tr><th>Order</th><th>Customer</th><th>Remaining items</th><th>Due back</th><th>Status</th><th></th></tr></thead><tbody>{out.map(r=><tr key={r._id}><td>{r.order?.orderNo}</td><td>{r.customer?.name} · {r.customer?.phone}</td><td>{itemList(r.items)}</td><td>{fmt(r.dueDate)}</td><td>{r.overdue?'Overdue':'Out'}<small><SecurityStatus order={r.order}/></small></td><td>{can(me,'rentals.write')&&<button onClick={()=>{setError('');setExtend(r);}}>Extend rental</button>}</td></tr>)}</tbody></ResponsiveTable></div>
  {details&&<CustomerDetails customer={details} onClose={()=>setDetails(null)} onSaved={()=>{setDetails(null);load();}}/>}{editing&&<EditOrder order={editing} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);load();}}/>}

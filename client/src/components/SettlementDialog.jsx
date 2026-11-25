@@ -25,6 +25,7 @@ export default function SettlementDialog({order,me,onClose,onSaved}){
   <button onClick={onClose}>Close</button>
  </div></div>;
  const rounded=n=>Math.round(n*100)/100;
+ const hasRentalItems=preview.hasRentalItems??order.hasRentalItems??true;
  const applyAmount=Math.min(preview.depositHeld,preview.balance);
  const due=rounded(preview.balance-(apply?applyAmount:0));
  const refundAmount=rounded(preview.depositHeld-(apply?applyAmount:0));
@@ -44,14 +45,14 @@ export default function SettlementDialog({order,me,onClose,onSaved}){
  }
  return <div className="modal"><form onSubmit={save}>
   <h2>Settle {preview.orderNo}</h2>
-  <p>Equipment has been received. Finish the payment and security actions below.</p>
+  <p>{hasRentalItems?'Equipment has been received. Finish the payment and security actions below.':'Sale items have been handed over. Record the remaining payment to complete the order.'}</p>
   {preview.depositHeld>0&&<section className="card security-card"><h3>Security deposit held · {lkr(preview.depositHeld)}</h3>
-   {canRefund?<>{applyAmount>0&&<label className="check"><input type="checkbox" checked={apply} onChange={e=>{setApply(e.target.checked);setRefund(false);setPaid(false);}}/>Apply {lkr(applyAmount)} to rental balance</label>}
+   {canRefund?<>{applyAmount>0&&<label className="check"><input type="checkbox" checked={apply} onChange={e=>{setApply(e.target.checked);setRefund(false);setPaid(false);}}/>Apply {lkr(applyAmount)} to order balance</label>}
     {refundAmount>0&&<label className="check"><input type="checkbox" checked={refund} onChange={e=>setRefund(e.target.checked)}/>Refund recorded · {lkr(refundAmount)}</label>}
     {refund&&<PaymentMethod label="Refund method" value={refundMethod} onChange={setRefundMethod}/>}
    </>:<p>Ask a staff member with deposit refund access to handle the deposit.</p>}
   </section>}
-  <section className="card"><p className="rental-balance-due">Remaining rental balance <strong>{lkr(due)}</strong></p>
+  <section className="card"><p className="rental-balance-due">Remaining order balance <strong>{lkr(due)}</strong></p>
    {due>0&&(canRecord?<label className="check"><input type="checkbox" checked={paid} onChange={e=>setPaid(e.target.checked)}/>Payment received · {lkr(due)}</label>:<p>Ask a staff member with payment access to record the balance.</p>)}
    {paid&&<PaymentMethod label="Payment method" value={paymentMethod} onChange={setPaymentMethod}/>}
   </section>

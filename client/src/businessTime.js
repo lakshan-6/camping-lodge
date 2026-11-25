@@ -13,6 +13,7 @@ export const formatPickup = order => hasPlannedDate(order)
   ? formatCalendarDate(order.startDate)
   : formatBusinessTime(order.startDate);
 export function formatReturn(order) {
+  if (order.hasRentalItems === false) return '—';
   if (!hasPlannedDate(order)) return formatBusinessTime(order.endDate);
   if (order.status === 'cancelled') return '—';
   return order.plannedReturnDate ? `${formatCalendarDate(order.plannedReturnDate)} (planned)` : '36 hours after pickup';

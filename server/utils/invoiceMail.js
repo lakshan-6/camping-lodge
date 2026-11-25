@@ -32,7 +32,7 @@ export async function emailInvoice(id) {
   const balance = inv.total - paid, done = balance <= 0, hasLogo = fs.existsSync(logoPath);
   const body = done
     ? `<p><b>Your payment is complete. Thank you!</b><br>Your paid invoice <b>${esc(inv.invoiceNo)}</b> for order ${esc(inv.order.orderNo)} is attached as a PDF.</p>`
-    : `<p>Your rental for order <b>${esc(inv.order.orderNo)}</b> has started. Your invoice <b>${esc(inv.invoiceNo)}</b> is attached as a PDF.</p>
+    : `<p>Your invoice <b>${esc(inv.invoiceNo)}</b> for order <b>${esc(inv.order.orderNo)}</b> is attached as a PDF.</p>
        <p>Total ${lkr(inv.total)} · Paid ${lkr(paid)} · <b>Balance due ${lkr(balance)}</b></p>
        <p>Once the full payment is received, we will email you a paid invoice.</p>`;
   const html = `<div style="font-family:Arial,sans-serif;max-width:560px;color:#1c2824">

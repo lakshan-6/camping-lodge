@@ -79,18 +79,20 @@ export default function MoneyOverview() {
     {data && <>
       <h3>{periodLabel}</h3>
       <div className="cards report-cards">
-        <Metric icon="wallet" label="Rental money received" value={lkr(data.rentalReceipts)} note="Advances and later rental payments"/>
-        <Metric icon="returns" label="Rental refunds paid" value={lkr(data.rentalRefunds)}/>
+        <Metric icon="wallet" label="Money received" value={lkr(data.totalReceipts)} note="Advances and later order payments"/>
+        <Metric icon="pickup" label="Net rental payments" value={lkr(data.rentalNet)} note="After refunds, including security applied to rent"/>
+        <Metric icon="orders" label="Net sales payments" value={lkr(data.salesNet)} note="After refunds, including security applied to sales"/>
+        <Metric icon="returns" label="Customer refunds paid" value={lkr(data.totalRefunds)}/>
         <Metric icon="receipt" label="Expenses paid" value={lkr(data.expenses)}/>
-        <Metric icon="chart" label="Rental receipts less expenses" value={lkr(data.receiptsLessExpenses)} tone="highlight"
-          note={`After rental refunds. Includes ${lkr(data.securityApplied)} of security applied to rent.`}/>
+        <Metric icon="chart" label="Net payments less expenses" value={lkr(data.receiptsLessExpenses)} tone="highlight"
+          note={`After refunds. Includes ${lkr(data.securityApplied)} of security applied to the order.`}/>
       </div>
 
       <div className="bar"><h3>Current balances</h3><Link to="/money?view=payments">View orders and payments</Link></div>
       <p>Across all dates, including orders that are still in progress.</p>
       <div className="cards report-cards">
         <Metric icon="orders" label="Customers still owe" value={lkr(data.current.outstanding)}/>
-        <Metric icon="returns" label="Rental refunds / credits due" value={lkr(data.current.refundDue)}/>
+        <Metric icon="returns" label="Customer refunds / credits due" value={lkr(data.current.refundDue)}/>
         <Metric icon="shield" label="Security money held" value={lkr(data.current.securityHeld)} note="Refundable customer deposits"/>
       </div>
 
@@ -98,12 +100,13 @@ export default function MoneyOverview() {
         <summary>Money received and paid by method</summary>
         <p>Security collected {lkr(data.securityCollected)} · Security refunded {lkr(data.securityRefunds)} · Net recorded money movement <b>{lkr(data.netMovement)}</b></p>
         <div className="tablewrap"><ResponsiveTable>
-          <thead><tr><th>Method</th><th>Rental money in</th><th>Security money in</th><th>Refunds paid</th><th>Expenses paid</th><th>Net movement</th></tr></thead>
+          <thead><tr><th>Method</th><th>Rental money in</th><th>Sales money in</th><th>Security money in</th><th>Refunds paid</th><th>Expenses paid</th><th>Net movement</th></tr></thead>
           <tbody>{data.byMethod.map(row => <tr key={row.method}>
             <td>{methodLabels[row.method] || row.method}</td>
             <td>{lkr(row.rentalReceipts)}</td>
+            <td>{lkr(row.salesReceipts)}</td>
             <td>{lkr(row.securityCollected)}</td>
-            <td>{lkr(row.rentalRefunds + row.securityRefunds)}</td>
+            <td>{lkr(row.totalRefunds + row.securityRefunds)}</td>
             <td>{lkr(row.expenses)}</td>
             <td><b>{lkr(row.netMovement)}</b></td>
           </tr>)}</tbody>

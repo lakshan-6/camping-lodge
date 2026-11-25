@@ -72,6 +72,19 @@ async function migrate(){
    await query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check, ADD CONSTRAINT orders_status_check CHECK (status IN ('reserved','active','settlement_pending','completed','cancelled'))",[],session);
    await query('INSERT INTO schema_migrations(version) VALUES(6)',[],session);
   }
+  if(!(await query('SELECT version FROM schema_migrations WHERE version=7',[],session)).rows.length){
+   await query(`ALTER TABLE equipment
+    ADD COLUMN IF NOT EXISTS "itemType" text NOT NULL DEFAULT 'rental' CHECK ("itemType" IN ('rental','sale')),
+    ADD COLUMN IF NOT EXISTS "sellingPrice" numeric(16,2) NOT NULL DEFAULT 0 CHECK ("sellingPrice" >= 0)`,[],session);
+   await query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS "fulfilledAt" timestamptz',[],session);
+   await query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS "itemType" text NOT NULL DEFAULT 'rental' CHECK ("itemType" IN ('rental','sale'))`,[],session);
+   await query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS "saleAmount" numeric(16,2) NOT NULL DEFAULT 0 CHECK ("saleAmount" >= 0),
+    DROP CONSTRAINT IF EXISTS payments_sale_amount_check,
+    ADD CONSTRAINT payments_sale_amount_check CHECK ("saleAmount" <= amount)`,[],session);
+   await query(`ALTER TABLE inventory_transactions DROP CONSTRAINT IF EXISTS inventory_transactions_type_check,
+    ADD CONSTRAINT inventory_transactions_type_check CHECK (type IN ('initial_stock','adjustment','rented_out','sold','returned','damaged','lost','repaired'))`,[],session);
+   await query('INSERT INTO schema_migrations(version) VALUES(7)',[],session);
+  }
  });
 }
 export async function connectDatabase(url=process.env.DATABASE_URL){

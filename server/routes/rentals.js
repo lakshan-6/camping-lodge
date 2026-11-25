@@ -3,7 +3,7 @@ import { Order, OrderItem, Customer, Rental, Equipment, EquipmentUnit,InventoryT
 import { httpErr, availability, PERIOD_MS } from '../utils/availability.js';
 import { mutate, audit, units, money, PAYMENT_METHODS } from '../utils/operations.js';
 import { requirePermission, can } from '../utils/permissions.js';
-import { paidTotal, rentalBalanceDue, recordPayment, syncInvoice, remainingLines,depositHeld,recordSecurityDeposit } from '../utils/finance.js';
+import { paidTotal, rentalBalanceDue, recordPayment, syncInvoice, remainingLines,depositHeld,recordSecurityDeposit,closeSettledOrder } from '../utils/finance.js';
 import { emailInvoice } from '../utils/invoiceMail.js';
 import { mailReady } from '../utils/mail.js';
 import { sendPickupUpdate } from '../utils/bookingEmail.js';
@@ -12,7 +12,7 @@ import {chooseSecurity,receiveNic,nicHeld} from '../utils/securityDeposit.js';
 import {allocateUnits,assertUnitTotals} from '../utils/equipmentUnits.js';
 import {lateFeeInfo} from '../utils/lateFees.js';
 const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
-const handoverChecklist=items=>items.flatMap(item=>{
+const handoverChecklist=items=>items.filter(item=>item.itemType!=='sale').flatMap(item=>{
  const parts=item.equipment.checklist||[];
  if(!parts.length)return [];
  const count=item.equipment.trackUnits?item.quantity:1;
@@ -28,12 +28,12 @@ r.get('/',wrap(async(req,res)=>{
 }));
 r.get('/pickup-preview/:order',requirePermission('rentals.write'),wrap(async(req,res)=>{
  const order=await Order.findById(req.params.order).lean();if(!order||order.deletedAt||order.status!=='reserved')throw httpErr(409,'Choose an uncollected booking');
- const lines=await remainingLines(order._id);
+ const lines=await OrderItem.find({order:order._id}).populate('equipment','name checklist trackUnits').lean();
  const items=[];for(const line of lines)items.push({...line,availableUnits:line.equipment.trackUnits?await EquipmentUnit.find({equipment:line.equipment._id,state:'good'}).select('code state').sort({code:1}).lean():[]});
  const held=nicHeld(order);
  const [securityHeld,paid]=await Promise.all([depositHeld(order._id),paidTotal(order._id)]);
  const method=held?'nic':securityHeld>0?'money':order.securityMethod??null;
- res.json({securityMethod:method,nicHeld:held,securityHeld,depositAmount:order.depositAmount,balance:rentalBalanceDue(order.totalAmount,paid),items,checklist:handoverChecklist(items)});
+ res.json({hasRentalItems:items.some(item=>item.itemType!=='sale'),securityMethod:method,nicHeld:held,securityHeld,depositAmount:order.depositAmount,balance:rentalBalanceDue(order.totalAmount,paid),items,checklist:handoverChecklist(items)});
 }));
 r.get('/active/:order',requirePermission('rentals.write'),wrap(async(req,res)=>{
  const rental=await Rental.findOne({order:req.params.order,status:{$in:['out','overdue']}}).populate('order','orderNo').lean();
@@ -45,9 +45,11 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
  const result=await mutate(req,'rental.start:'+req.body.order,async session=>{
   payment=undefined; deposit=undefined;
   const order=await Order.findById(req.body.order).session(session);if(!order||order.deletedAt)throw httpErr(404,'Order not found');
-  if(order.status!=='reserved'||await Rental.exists({order:order._id}).session(session))throw httpErr(409,'This booking has already been collected or cancelled');
+  if(order.status!=='reserved'||order.fulfilledAt||await Rental.exists({order:order._id}).session(session))throw httpErr(409,'This booking has already been collected or cancelled');
   const customer=await Customer.findById(order.customer).session(session);if(!customer||customer.detailsPending)throw httpErr(409,'Complete customer name and NIC before handover');
   const items=await OrderItem.find({order:order._id}).populate('equipment').session(session);
+  if(!items.length||items.some(item=>!item.equipment))throw httpErr(409,'The order items have changed. Review the booking before pickup.');
+  const rentalItems=items.filter(item=>item.itemType!=='sale'),saleItems=items.filter(item=>item.itemType==='sale');
   await Equipment.updateMany({_id:{$in:items.map(i=>i.equipment._id)}},{$inc:{revision:1}},{session});
   const now=new Date(),dueDate=new Date(+now+(order.periods||1)*PERIOD_MS);
   const avail=new Map((await availability(now,dueDate,order._id,session)).map(i=>[String(i._id),i]));
@@ -62,6 +64,7 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
    confirmed.add(item.key);
   }
   const pickupChecklist=offered.filter(i=>confirmed.has(i.key)).map(i=>({...i,checked:true}));
+  if(rentalItems.length){
   const securityPending=!order.securityMethod;
   await chooseSecurity(order,req.body.securityMethod??order.securityMethod,session);
   if(order.securityMethod==='nic'){
@@ -77,6 +80,7 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
    }
    if(await depositHeld(order._id,session)<=0)throw httpErr(409,'Record the money security deposit before handover, or choose NIC security');
   }
+  }else if(nicHeld(order)||(await depositHeld(order._id,session))>0)throw httpErr(409,'Resolve any held security before delivering sale items only.');
   const received=req.body.rentalPayment;
   if(received!==undefined){
    if(typeof received?.amount!=='number')throw httpErr(400,'Enter the rental payment received at pickup');
@@ -91,8 +95,23 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
    const amount=rentalBalanceDue(order.totalAmount,await paidTotal(order._id,session));
    if(amount)payment=await recordPayment(order,{amount,type:'balance',method:req.body.method},req.user,session);
   }
+  for(const line of saleItems){
+   if(line.equipment.itemType!=='sale'||line.equipment.trackUnits)throw httpErr(409,'Review the sale item settings before delivery.');
+   line.equipment.totalQuantity-=line.quantity;
+   line.equipment.revision++;
+   await line.equipment.save({session});
+  }
+  if(!rentalItems.length){
+   order.fulfilledAt=now;order.startDate=now;order.endDate=new Date(+now+1);order.status='settlement_pending';order.securityMethod=undefined;order.depositAmount=0;
+   order.sendVia=['email','whatsapp','both','none'].includes(req.body.sendVia)?req.body.sendVia:'none';
+   await closeSettledOrder(order,session);await order.save({session});
+   await InventoryTransaction.insertMany(saleItems.map(item=>({equipment:item.equipment._id,type:'sold',quantity:-item.quantity,reference:String(order._id)})),{session});
+   const invoice=await syncInvoice(order,session,true);
+   await audit(session,req.user,'sale.delivered',order._id,null,{items:saleItems.map(item=>({equipment:item.equipment._id,quantity:item.quantity})),status:order.status});
+   return {order:order._id,saleOnly:true,orderStatus:order.status,pickedUpAt:now,invoiceId:invoice._id,via:order.sendVia};
+  }
   const [rental]=await Rental.create([{order:order._id,customer:order.customer,pickedUpAt:now,dueDate}],{session});
-  await allocateUnits(items,req.body.unitSelections,rental,session);
+  await allocateUnits(rentalItems,req.body.unitSelections,rental,session);
   const linesByEquipment=new Map(items.map(line=>[String(line.equipment._id),line]));
   const selectedByEquipment=new Map((req.body.unitSelections||[]).map(choice=>[String(choice.equipment),choice.units]));
   rental.pickupChecklist=pickupChecklist.map(({key,label,equipment,unitIndex})=>{
@@ -101,8 +120,8 @@ r.post('/start',requirePermission('rentals.write'),wrap(async(req,res)=>{
    return {key,label:code?`${label.replace(/ · Unit \d+$/, '')} · ${code}`:label,checked:true};
   });
   if(rental.pickupChecklist.length)await rental.save({session});
-  order.startDate=now;order.endDate=dueDate;order.status='active';order.sendVia=['email','whatsapp','both','none'].includes(req.body.sendVia)?req.body.sendVia:'none';await order.save({session});
-  await InventoryTransaction.insertMany(items.map(i=>({equipment:i.equipment._id,type:'rented_out',quantity:-i.quantity,reference:String(order._id)})),{session});
+  order.fulfilledAt=now;order.startDate=now;order.endDate=dueDate;order.status='active';order.sendVia=['email','whatsapp','both','none'].includes(req.body.sendVia)?req.body.sendVia:'none';await order.save({session});
+  await InventoryTransaction.insertMany(items.map(i=>({equipment:i.equipment._id,type:i.itemType==='sale'?'sold':'rented_out',quantity:-i.quantity,reference:String(order._id)})),{session});
   const invoice=await syncInvoice(order,session,true);await audit(session,req.user,'rental.started',order._id,null,{rental:rental._id,dueDate,checklist:rental.pickupChecklist});
   return {...rental.toObject(),invoiceId:invoice._id,via:order.sendVia};
  });

@@ -10,9 +10,11 @@ const r=Router(),wrap=fn=>(req,res,next)=>fn(req,res).catch(next);
 const esc=s=>String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 function parse(body,before){
  if(typeof body.name!=='string'||!body.name.trim()||typeof body.category!=='string'||!body.category.trim())throw httpErr(400,'Name and category are required');
+ const itemType=body.itemType??before?.itemType??'rental';
+ if(!['rental','sale'].includes(itemType))throw httpErr(400,'Choose Rental or Sale');
  const totalQuantity=units(body.totalQuantity,true);
  let damagedQty=units(body.damagedQty??before?.damagedQty??0,true);
- if(body.unitConditions!==undefined){
+ if(body.unitConditions!==undefined&&itemType!=='sale'){
   const added=totalQuantity-(before?.trackUnits?before.totalQuantity:0);
   if(added<0)throw httpErr(409,'Mark individual units lost or retired to reduce tracked stock');
   if((body.trackUnits??before?.trackUnits)!==true||!Array.isArray(body.unitConditions)||body.unitConditions.length!==added||body.unitConditions.some(state=>!['good','damaged'].includes(state)))
@@ -20,7 +22,23 @@ function parse(body,before){
   damagedQty=(before?.trackUnits?before.damagedQty:0)+body.unitConditions.filter(state=>state==='damaged').length;
  }
  if(damagedQty>totalQuantity)throw httpErr(400,'Damaged quantity cannot exceed total stock');
- return {name:body.name.trim(),category:body.category.trim(),sku:body.sku||before?.sku,totalQuantity,damagedQty,periodRate:money(body.periodRate,'Rate',true),deposit:money(body.deposit??before?.deposit??0,'Deposit',true),condition:body.condition||before?.condition||'good',notes:body.notes||'',checklist:Array.isArray(body.checklist)?body.checklist.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()).slice(0,30):[]};
+ return {name:body.name.trim(),category:body.category.trim(),sku:body.sku||before?.sku,itemType,sellingPrice:money(body.sellingPrice??before?.sellingPrice??0,'Selling price',itemType!=='sale'),totalQuantity,damagedQty,periodRate:money(body.periodRate??before?.periodRate??0,'Rate',true),deposit:itemType==='sale'?0:money(body.deposit??before?.deposit??0,'Deposit',true),condition:body.condition||before?.condition||'good',notes:body.notes||'',checklist:itemType==='sale'?[]:Array.isArray(body.checklist)?body.checklist.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()).slice(0,30):[]};
+}
+async function configureItemType(item,body,before,session){
+ if(before&&(before.itemType??'rental')!==item.itemType){
+  const open=await Order.find({status:{$in:['reserved','active']}}).select('_id status').session(session);
+  const lines=await OrderItem.find({equipment:item._id,order:{$in:open.map(order=>order._id)}}).session(session);
+  const statuses=new Map(open.map(order=>[String(order._id),order.status]));
+  if(lines.some(line=>statuses.get(String(line.order))==='reserved'||line.itemType!=='sale'&&line.quantity>(line.returnedQuantity||0)))
+   throw httpErr(409,'Finish or cancel open bookings for this item before changing Rental / Sale.');
+  if(await Repair.exists({equipment:item._id,status:'open'}).session(session))throw httpErr(409,'Finish open repairs before changing the item type.');
+ }
+ if(item.itemType==='sale'){
+  if(before?.trackUnits)await EquipmentUnit.updateMany({equipment:item._id,state:{$in:['good','damaged']}},{$set:{state:'retired',notes:'Converted to sale stock'},$unset:{rental:1}},{session});
+  item.trackUnits=false;
+  return;
+ }
+ await configureUnits(item,body,before,session);
 }
 const skuWords=value=>value.normalize('NFKD').replace(/\p{M}/gu,'').toUpperCase().match(/[A-Z]+/g)||[];
 async function allocateSku(data,session){
@@ -39,12 +57,12 @@ r.get('/categories',wrap(async(req,res)=>{
 r.get('/',wrap(async(req,res)=>{const f={active:req.query.archived!=='true'};if(req.query.category)f.category=String(req.query.category);if(req.query.q)f.$or=[{name:new RegExp(esc(req.query.q),'i')},{sku:new RegExp(esc(req.query.q),'i')}];res.json(await Equipment.find(f).sort({category:1,name:1}));}));
 r.post('/',requirePermission('inventory.manage'),wrap(async(req,res)=>res.status(201).json(await mutate(req,'equipment.create',async session=>{
  const data=parse(req.body);await allocateSku(data,session);
- const [item]=await Equipment.create([data],{session});await configureUnits(item,req.body,null,session);await item.save({session});if(item.totalQuantity)await InventoryTransaction.create([{equipment:item._id,type:'initial_stock',quantity:item.totalQuantity}],{session});await audit(session,req.user,'equipment.created',item._id,null,item);return item;
+ const [item]=await Equipment.create([data],{session});await configureItemType(item,req.body,null,session);await item.save({session});if(item.totalQuantity)await InventoryTransaction.create([{equipment:item._id,type:'initial_stock',quantity:item.totalQuantity}],{session});await audit(session,req.user,'equipment.created',item._id,null,item);return item;
 }))));
 r.put('/:id',requirePermission('inventory.manage'),wrap(async(req,res)=>res.json(await mutate(req,'equipment.edit:'+req.params.id,async session=>{
  const item=await Equipment.findById(req.params.id).session(session);if(!item)throw httpErr(404,'Item not found');const before=item.toObject(),data=parse(req.body,before);
  checkStock(await stockSnapshot(item._id,session),data.totalQuantity,data.damagedQty);
- await assertUnitTotals(item,session);await allocateSku(data,session);item.set(data);await configureUnits(item,req.body,before,session);item.revision++;await item.save({session});if(item.totalQuantity!==before.totalQuantity)await InventoryTransaction.create([{equipment:item._id,type:'adjustment',quantity:item.totalQuantity-before.totalQuantity,note:'Inventory edit'}],{session});await audit(session,req.user,'equipment.edited',item._id,before,item);return item;
+ await assertUnitTotals(item,session);await allocateSku(data,session);item.set(data);await configureItemType(item,req.body,before,session);item.revision++;await item.save({session});if(item.totalQuantity!==before.totalQuantity)await InventoryTransaction.create([{equipment:item._id,type:'adjustment',quantity:item.totalQuantity-before.totalQuantity,note:'Inventory edit'}],{session});await audit(session,req.user,'equipment.edited',item._id,before,item);return item;
 }))));
 r.delete('/:id',requirePermission('inventory.manage'),wrap(async(req,res)=>res.json(await mutate(req,'equipment.archive:'+req.params.id,async session=>{
  const item=await Equipment.findById(req.params.id).session(session);if(!item)throw httpErr(404,'Item not found');const orders=await Order.find({status:{$in:['reserved','active']}}).select('_id').session(session);
@@ -65,6 +83,7 @@ r.get('/:id/units/:unit/history',requirePermission('inventory.manage'),wrap(asyn
 }));
 r.patch('/:id/units/:unit',requirePermission('inventory.manage'),wrap(async(req,res)=>res.json(await mutate(req,'unit.condition:'+req.params.unit,async session=>{
  const snapshot=await stockSnapshot(req.params.id,session),item=snapshot.item;await assertUnitTotals(item,session);
+ if(!item.trackUnits)throw httpErr(409,'This item uses quantity stock. Update its quantity in Inventory.');
  const unit=await EquipmentUnit.findOne({_id:req.params.unit,equipment:item._id}).session(session);if(!unit)throw httpErr(404,'Unit not found');
  if(['out','repair'].includes(unit.state))throw httpErr(409,'Receive this unit through Returns or finish its repair job first');
  const state=req.body.state;if(!['good','damaged','lost','retired'].includes(state)||state===unit.state)throw httpErr(400,'Choose a different unit condition');

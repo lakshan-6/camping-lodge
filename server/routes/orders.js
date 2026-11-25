@@ -7,7 +7,7 @@ import { nextDocumentNumber } from '../utils/documentNumbers.js';
 import { previewOrderDeletion, permanentlyDeleteOrder } from '../utils/orderDeletion.js';
 import { mutate, audit, money, PAYMENT_METHODS } from '../utils/operations.js';
 import { requirePermission, assertPermission, can } from '../utils/permissions.js';
-import { priceItems, paidTotal, rentalBalanceDue, recordPayment, syncInvoice, depositHeld, closeSettledOrder } from '../utils/finance.js';
+import { priceItems, paidTotal, rentalBalanceDue, recordPayment, syncInvoice, depositHeld, closeSettledOrder, rebalancePaymentAllocations } from '../utils/finance.js';
 import {dayRange} from '../utils/businessTime.js';
 import {securityMethod,chooseSecurity,receiveNic,releaseNic,nicHeld} from '../utils/securityDeposit.js';
 import {bookingContact,resolveBookingCustomer} from '../utils/customers.js';
@@ -33,7 +33,8 @@ r.get('/',wrap(async(req,res)=>{
   const items=await OrderItem.find({order:{$in:orders.map(o=>o._id)}}).populate('equipment','name checklist').lean();
   const rows=await Promise.all(orders.map(async o=>{
     const paid=pickupBalances?await paidTotal(o._id):null;
-    return {...o,items:items.filter(i=>String(i.order)===String(o._id)),...(pickupBalances?{paid,balance:rentalBalanceDue(o.totalAmount,paid)}:{})};
+    const orderItems=items.filter(i=>String(i.order)===String(o._id));
+    return {...o,items:orderItems,hasRentalItems:orderItems.some(item=>item.itemType!=='sale'),...(pickupBalances?{paid,balance:rentalBalanceDue(o.totalAmount,paid)}:{})};
   }));
   res.json(paged?{rows,total:await Order.countDocuments(filter),page,pageSize}:rows);
 }));
@@ -61,11 +62,12 @@ r.post('/',requirePermission('orders.write'),wrap(async(req,res)=>{
       bookingContact(customer);
     }
     const p=await priceItems(req.body,session);
+    if(!p.hasRentalItems&&(method!==null||depositAmount!==undefined))throw httpErr(400,'Security deposits apply to rental items.');
     if(advanceAmount>p.total)throw httpErr(409,'Rental advance cannot exceed the rental total');
     const [order]=await Order.create([{orderNo:await nextDocumentNumber('order',session),customer:customer._id,pickupDate:p.pickupDate,plannedReturnDate:p.plannedReturnDate,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount:depositAmount??p.deposit,securityMethod:method,notes:req.body.notes}],{session});
     await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
     await recordPayment(order,{type:'deposit',amount:advanceAmount,method:advance.method,reference:advance.reference,reason:advance.reason},req.user,session);
-    await audit(session,req.user,'order.created',order._id,null,order);return order;
+    await audit(session,req.user,'order.created',order._id,null,order);return {...order.toObject(),hasRentalItems:p.hasRentalItems};
   });
   const bookingEmail = result._replayed ? 'already_processed' : await sendBookingConfirmation(result._id);
   res.status(201).json({...result, bookingEmail});
@@ -78,14 +80,17 @@ r.put('/:id',requirePermission('orders.write'),wrap(async(req,res)=>{
     const before=order.toObject();
     const oldLines=await OrderItem.find({order:order._id}).select('equipment periodRate').session(session);
     const rates=new Map(oldLines.map(line=>[String(line.equipment),line.periodRate]));
-    const pickupDate=req.body.pickupDate===undefined?order.pickupDate:req.body.pickupDate;
+    const pickupDate=req.body.pickupDate===undefined?(req.body.startDate===undefined?order.pickupDate:undefined):req.body.pickupDate;
     const plannedReturnDate=req.body.plannedReturnDate===undefined?order.plannedReturnDate:req.body.plannedReturnDate;
     const p=await priceItems({pickupDate,plannedReturnDate,startDate:req.body.startDate||order.startDate,endDate:req.body.endDate||order.endDate,items:req.body.items},session,order._id,rates);
     if(req.body.confirmedTotal!==undefined&&money(req.body.confirmedTotal,'Confirmed total',true)!==p.total)
       throw httpErr(409,'The booking price changed. Reopen the booking to review the new total.');
     await OrderItem.deleteMany({order:order._id},{session});await OrderItem.insertMany(p.lines.map(i=>({...i,order:order._id})),{session});
-    const depositAmount=order.securityMethod==='money'?order.depositAmount??p.deposit:p.deposit;
+    if(!p.hasRentalItems&&((await depositHeld(order._id,session))>0||nicHeld(order)))throw httpErr(409,'Release rental security before changing this booking to sale items only.');
+    const depositAmount=p.hasRentalItems?(order.securityMethod==='money'?order.depositAmount??p.deposit:p.deposit):0;
+    if(!p.hasRentalItems)order.securityMethod=undefined;
     order.set({pickupDate:p.pickupDate,plannedReturnDate:p.plannedReturnDate,startDate:p.start,endDate:p.end,periods:p.periods,totalAmount:p.total,depositAmount});await order.save({session});
+    await rebalancePaymentAllocations(order,req.user,session);
     await syncInvoice(order,session);await audit(session,req.user,'order.edited',order._id,before,order);return order;
   }));
 }));
@@ -143,7 +148,7 @@ r.get('/:id/detail',wrap(async(req,res)=>{
   const emailHistory=(await AuditEvent.find({target:String(order._id),action:{$in:emailActions}}).sort({createdAt:-1,_id:-1}).limit(30).lean())
     .map(({_id,action,after,createdAt})=>({_id,event:action.slice(6),status:after?.status,createdAt}));
   const canRetryBookingEmail=order.status==='reserved'&&can(req.user,'orders.write')&&retryableEmailStatus.includes(emailHistory.find(row=>row.event==='booking')?.status);
-  res.json({...order,placedByName:creation?.actorName?.trim()||null,items,returnFees,paid:await paidTotal(order._id),securityHeld:await depositHeld(order._id),payments:showPayments?await Payment.find({order:order._id}).sort({paidAt:-1}).lean():[],invoices:await Invoice.find({order:order._id}).lean(),emailHistory,canRetryBookingEmail});
+  res.json({...order,hasRentalItems:items.some(item=>item.itemType!=='sale'),placedByName:creation?.actorName?.trim()||null,items,returnFees,paid:await paidTotal(order._id),securityHeld:await depositHeld(order._id),payments:showPayments?await Payment.find({order:order._id}).sort({paidAt:-1}).lean():[],invoices:await Invoice.find({order:order._id}).lean(),emailHistory,canRetryBookingEmail});
 }));
 r.get('/:id/past-delete-preview',ownerOnly,wrap(async(req,res)=>res.json(await previewOrderDeletion(req.params.id))));
 r.delete('/:id/past',ownerOnly,limit,wrap(async(req,res)=>{

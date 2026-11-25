@@ -6,7 +6,7 @@ import {PageIntro,EmptyState} from '../components/UI.jsx';
 import Icon from '../components/Icon.jsx';
 import EquipmentUnits from '../components/EquipmentUnits.jsx';
 
-const blank = { name: '', category: '', totalQuantity: 1, periodRate: '', notes: '', trackUnits: true };
+const blank = { name: '', category: '', totalQuantity: 1, itemType: 'rental', periodRate: '', sellingPrice: '', notes: '', trackUnits: true };
 const condLabel = { good: 'Good', fair: 'Fair', needs_repair: 'Needs repair' };
 const maxNewUnits = 2000;
 
@@ -35,13 +35,15 @@ export default function Inventory({me}) {
     setErr('');
     setForm({
       ...(item || blank), existing: item || null, newCategory: false,
+      itemType: item?.itemType || 'rental', sellingPrice: item?.sellingPrice ?? '',
       unitConditions: {}, requestId: crypto.randomUUID(),
     });
   }
   const set = k => e => setForm({ ...form, [k]: e.target.value });
   const categoryIndex = categories.indexOf(form?.category);
   const enteringNewCategory = form?.newCategory || (!!form?.category && categoryIndex < 0);
-  const existingTracked = !!form?.existing?.trackUnits;
+  const sale = form?.itemType === 'sale';
+  const existingTracked = !sale && !!form?.existing?.trackUnits;
   const existingUnits = existingTracked ? form.existing.totalQuantity : 0;
   const addedUnits = Number(form?.totalQuantity) - existingUnits;
   const unitConditions = form?.trackUnits && Number.isInteger(addedUnits) && addedUnits >= 0 && addedUnits <= maxNewUnits
@@ -53,8 +55,9 @@ export default function Inventory({me}) {
     e.preventDefault(); setErr('');
     try {
       if (form.trackUnits && !unitConditions) throw new Error('Enter a valid number of new units.');
-      const {name,category,totalQuantity,periodRate,notes,checklist,trackUnits,requestId}=form;
-      const body = {name,category,totalQuantity:Number(totalQuantity),periodRate:Number(periodRate),notes,checklist,trackUnits,requestId,unitConditions};
+      const {name,category,totalQuantity,itemType,periodRate,sellingPrice,notes,checklist,trackUnits,requestId}=form;
+      const body = {name,category,totalQuantity:Number(totalQuantity),itemType,periodRate:Number(periodRate || 0),
+        sellingPrice:sale?Number(sellingPrice):Number(sellingPrice || 0),notes,checklist,trackUnits:!sale&&trackUnits,requestId,unitConditions};
       const saved = await (form._id ? api('/equipment/' + form._id, { method: 'PUT', body }) : api('/equipment', { method: 'POST', body }));
       setCategories(current => [...new Set([...current,saved.category])].sort((a,b)=>a.localeCompare(b)));
       setForm(null); load(); loadCategories();
@@ -66,7 +69,7 @@ export default function Inventory({me}) {
 
   return (
     <>
-      <PageIntro eyebrow="Equipment & stock" title="Adventure starts with good gear." description="Keep equipment organised, check your stock and prepare every item for its next rental."/>
+      <PageIntro eyebrow="Equipment & stock" title="Adventure starts with good gear." description="Manage rental equipment, items for sale and available stock."/>
       <div className="bar filter-panel">
         <div className="search-field"><Icon name="search" size={18}/><input aria-label="Search equipment" type="search" placeholder="Search name or SKU" value={q} onChange={e => setQ(e.target.value)} /></div>
         <select aria-label="Equipment category" value={cat} onChange={e => setCat(e.target.value)}>
@@ -74,20 +77,20 @@ export default function Inventory({me}) {
           {categories.map(c => <option key={c}>{c}</option>)}
         </select>
         <label className="check"><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>Archived items</label>
-        {can(me,'inventory.manage')&&<button className="btn" onClick={() => openForm()}><Icon name="plus" size={17}/>Add equipment</button>}
+        {can(me,'inventory.manage')&&<button className="btn" onClick={() => openForm()}><Icon name="plus" size={17}/>Add item</button>}
       </div>
       {err && !form && <p className="bad">{err}</p>}
       {items.length === 0 ? (
         <EmptyState icon="tent" title="No equipment found" description={q||cat?'Try another search or choose a different category.':'Add your first item to start building your inventory.'}/>
       ) : (
         <div className="tablewrap"><ResponsiveTable>
-          <thead><tr><th>Item</th><th>Category</th><th>Units</th><th>Rate / 36h</th><th>Condition</th><th></th></tr></thead>
+          <thead><tr><th>Item</th><th>Category</th><th>Units</th><th>Price</th><th>Condition</th><th></th></tr></thead>
           <tbody>{items.map(i => (
             <tr key={i._id}>
-              <td data-l="Item"><b>{i.name}</b>{i.sku && <small> {i.sku}</small>}</td>
+              <td data-l="Item"><b>{i.name}</b>{i.sku && <small> {i.sku}</small>}<small>{i.itemType==='sale'?'Sale':'Rental'}</small></td>
               <td data-l="Category">{i.category}</td>
               <td data-l="Units">{i.totalQuantity}{i.damagedQty > 0 && <small>{i.damagedQty} damaged</small>}{i.trackUnits&&<small>Individually labelled</small>}</td>
-              <td data-l="Rate / 36h">{lkr(i.periodRate)}</td>
+              <td data-l="Price">{lkr(i.itemType==='sale'?i.sellingPrice:i.periodRate)}<small>{i.itemType==='sale'?'per item':'per 36h'}</small></td>
               <td data-l="Condition">{i.trackUnits
                 ?<span className={'tag '+(i.damagedQty?'needs_repair':'good')}>{i.damagedQty?'Units need attention':'No damaged units'}</span>
                 :<span className={'tag ' + i.condition}>{condLabel[i.condition]}</span>}</td>
@@ -103,8 +106,12 @@ export default function Inventory({me}) {
       {form && (
         <div className="modal" onClick={() => setForm(null)}>
           <form onClick={e => e.stopPropagation()} onSubmit={save}>
-            <h2>{form._id ? 'Edit equipment' : 'Add equipment'}</h2>
+            <h2>{form._id ? 'Edit item' : 'Add item'}</h2>
             <label>Name<input required value={form.name} onChange={set('name')} /></label>
+            <label>Item type<select value={form.itemType} onChange={e=>setForm({...form,itemType:e.target.value,
+              trackUnits:e.target.value==='sale'?false:form.existing?.trackUnits??true})}>
+              <option value="rental">Rental equipment</option><option value="sale">Item for sale</option>
+            </select></label>
             {categories.length>0&&<label>Category
               <select required value={enteringNewCategory?'new':categoryIndex<0?'':String(categoryIndex)} onChange={e=>{
                 const choice=e.target.value;
@@ -121,9 +128,10 @@ export default function Inventory({me}) {
             <label>SKU<input readOnly value={form.sku||''} placeholder="Short code from category and name" /></label>
             <div className="row">
               <label>Total units<input type="number" step="1" min={existingUnits} max={form.trackUnits?existingUnits+maxNewUnits:undefined} required value={form.totalQuantity} onChange={set('totalQuantity')} /></label>
-              <label>Rate per 36h (LKR)<input type="number" min="0" step="0.01" required value={form.periodRate} onChange={set('periodRate')} /></label>
+              {sale?<label>Selling price per item (LKR)<input type="number" min="0.01" step="0.01" required value={form.sellingPrice} onChange={set('sellingPrice')} /></label>
+                :<label>Rate per 36h (LKR)<input type="number" min="0" step="0.01" required value={form.periodRate} onChange={set('periodRate')} /></label>}
             </div>
-            {form._id&&!existingTracked&&<label className="check">
+            {!sale&&form._id&&!existingTracked&&<label className="check">
               <input type="checkbox" checked={!!form.trackUnits} onChange={e=>setForm({...form,trackUnits:e.target.checked})}/>
               Track each existing unit with its own code
             </label>}
@@ -139,7 +147,8 @@ export default function Inventory({me}) {
               </div>
             </fieldset>}
             {existingTracked&&<p className="hint">To change conditions for existing units, use <b>Unit codes</b> on the inventory list.</p>}
-            <label>Pickup / return checklist (one part per line)<textarea rows="3" placeholder={'Poles\nPegs\nCarry bag'} value={(form.checklist||[]).join('\n')} onChange={e=>setForm({...form,checklist:e.target.value.split('\n')})}/></label>
+            {sale?<p className="hint">Sold quantities leave stock when handed over to the customer.</p>:
+              <label>Pickup / return checklist (one part per line)<textarea rows="3" placeholder={'Poles\nPegs\nCarry bag'} value={(form.checklist||[]).join('\n')} onChange={e=>setForm({...form,checklist:e.target.value.split('\n')})}/></label>}
             <label>Notes<textarea rows="2" value={form.notes || ''} onChange={set('notes')} /></label>
             {err && <p className="bad">{err}</p>}
             <div className="row end"><button type="button" onClick={() => setForm(null)}>Cancel</button><button className="btn">Save</button></div>

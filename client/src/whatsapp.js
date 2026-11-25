@@ -20,36 +20,40 @@ export function getOrderWhatsAppUpdates(order, businessName = 'Camping Lodge') {
   if (!order?.orderNo || order.deletedAt || !whatsAppLink(order.customer?.phone, '')) return [];
 
   const updates = [];
+  const orderItems=order.items??[];
+  const sales=orderItems.some(item=>item.itemType==='sale');
+  const saleOnly=orderItems.length>0&&orderItems.every(item=>item.itemType==='sale');
   const intro = `Hello, this is ${businessName || 'Camping Lodge'}.\nOrder ${order.orderNo}`;
   const balance = Math.max(0, Math.round((order.totalAmount - order.paid) * 100) / 100);
-  const balanceLine = 'Rental balance: ' + lkr(balance);
+  const balanceLine = (sales?'Order balance: ':'Rental balance: ') + lkr(balance);
   const add = (key, label, lines) => {
     const message = [intro, ...lines].join('\n');
     updates.push({ key, label, url: whatsAppLink(order.customer.phone, message) });
   };
 
   if (order.status === 'reserved') {
-    const items = (order.items ?? []).map(item => `${item.quantity} × ${item.equipment?.name || 'Equipment'}`);
+    const items = orderItems.map(item => `${item.quantity} × ${item.equipment?.name || 'Equipment'} · ${item.itemType==='sale'
+      ?`Sale · ${lkr(item.periodRate)} each`:`Rental · ${lkr(item.periodRate)} / 36h × ${item.periods} period(s)`}`);
     add('booking', 'Booking confirmation', [
       'Your booking is confirmed.',
       'Pickup: ' + formatPickup(order),
-      'Return: ' + formatReturn(order),
+      ...(saleOnly?[]:['Return: ' + formatReturn(order)]),
       ...items,
-      'Rental total: ' + lkr(order.totalAmount),
+      (sales?'Order total: ':'Rental total: ') + lkr(order.totalAmount),
       balanceLine,
     ]);
   }
 
-  if (order.status === 'active') {
+  if (order.status === 'active'||saleOnly&&order.fulfilledAt) {
     add('pickup', 'Pickup confirmation', [
-      'Your equipment pickup has been recorded.',
-      'Picked up: ' + formatPickup(order),
-      'Due back: ' + formatReturn(order),
+      saleOnly?'Your purchased items have been handed over.':'Your equipment pickup has been recorded.',
+      'Picked up: ' + (saleOnly?formatBusinessTime(order.fulfilledAt):formatPickup(order)),
+      ...(saleOnly?[]:['Due back: ' + formatReturn(order)]),
       balanceLine,
     ]);
   }
 
-  if (['settlement_pending', 'completed'].includes(order.status)) {
+  if (!saleOnly&&['settlement_pending', 'completed'].includes(order.status)) {
     const outcome = order.status === 'completed' ? 'Your order is complete.' : 'Your return has been recorded. Settlement is still pending.';
     add('return', 'Return update', [outcome, balanceLine]);
   } else if (order.status === 'active' && order.items?.some(item => item.returnedQuantity > 0)) {
@@ -57,7 +61,9 @@ export function getOrderWhatsAppUpdates(order, businessName = 'Camping Lodge') {
   }
 
   for (const payment of order.payments ?? []) {
-    const name = paymentNames[payment.type] || 'Rental payment';
+    const salePayment=(payment.saleAmount||0)>0;
+    const kind=payment.saleAmount>=payment.amount?'Sales':'Order';
+    const name = salePayment?`${kind} ${payment.type==='refund'?'refund':'payment'}`:(paymentNames[payment.type]||'Rental payment');
     const amount = lkr(payment.amount);
     const date = formatBusinessTime(payment.paidAt);
     add(payment._id, `${name} · ${amount} · ${date}`, [
@@ -77,7 +83,7 @@ export async function sendInvoiceWhatsApp(id) {
     const [i, st] = await Promise.all([api('/invoices/' + id), api('/settings')]);
     if (i.status === 'void') throw new Error('This invoice is void');
     const done = i.balance <= 0;
-    const msg = `Hello ${i.customer?.name || ''},\n${done ? 'Your payment is complete. Thank you!' : 'Your rental has started.'}\n`
+    const msg = `Hello ${i.customer?.name || ''},\n${done ? 'Your payment is complete. Thank you!' : 'Your invoice is ready.'}\n`
       + `${st.businessName} invoice ${i.invoiceNo} (order ${i.order?.orderNo})\nTotal: ${lkr(i.total)}\nPaid: ${lkr(i.paid)}\n`
       + `${done ? '' : 'Balance due: ' + lkr(i.balance) + '\n'}Thank you for choosing ${st.businessName}.`;
     const url = whatsAppLink(i.customer?.phone, msg);

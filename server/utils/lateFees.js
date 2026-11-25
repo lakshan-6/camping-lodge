@@ -26,7 +26,8 @@ export function lateFeeInfo(rental, lines, settings = {}, now = Date.now()) {
   const additionalPercent = Math.round((chargedPercent - previouslyCharged) * 100) / 100;
   const previousBasisPoints = Math.round(previouslyCharged * 100);
   const chargedBasisPoints = Math.round(chargedPercent * 100);
-  const feeCents = lines.reduce((sum, { remaining, periodRate }) => {
+  const feeCents = lines.reduce((sum, { remaining, periodRate, itemType }) => {
+    if(itemType==='sale')return sum;
     const rateCents = Math.round(periodRate * 100);
     const before = Math.round(rateCents * previousBasisPoints / 10000);
     const after = Math.round(rateCents * chargedBasisPoints / 10000);

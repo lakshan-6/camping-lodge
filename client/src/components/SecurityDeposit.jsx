@@ -4,6 +4,7 @@ import {can} from '../permissions.js';
 
 export const holdsNic=order=>!!order?.nicHeldAt&&!order?.nicReturnedAt;
 export function SecurityStatus({order}){
+ if(order?.hasRentalItems===false)return <span>Not required</span>;
  if(holdsNic(order))return <span className="tag fair">NIC held · return pending</span>;
  if(order?.securityMethod==='nic')return <span className="tag">{order.nicReturnedAt?'NIC returned':'NIC · collect at pickup'}</span>;
  if(order?.status==='reserved'&&!order.securityMethod)return <span className="tag">Choose at pickup</span>;

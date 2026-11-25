@@ -5,11 +5,11 @@ import {can} from '../permissions.js';
 import {getOrderWhatsAppUpdates,sendInvoiceWhatsApp} from '../whatsapp.js';
 import SecurityDeposit from './SecurityDeposit.jsx';
 import {emailStatusMessage} from '../emailStatus.js';
-import {formatPickup,formatReturn} from '../businessTime.js';
+import {formatPickup,formatReturn,formatBusinessTime} from '../businessTime.js';
 import SettlementDialog from './SettlementDialog.jsx';
 import LateFeeWaiverDialog from './LateFeeWaiverDialog.jsx';
-const labels={deposit:'Rental advance',rental:'Rental payment',balance:'Rental balance',fee:'Extra charge',refund:'Refund to customer'};
-const emailLabels={booking:'Booking confirmation',pickup:'Pickup confirmation',payment:'Rental payment',deposit:'Security deposit',return:'Equipment return',settlement:'Return settlement'};
+const labels={deposit:'Advance',rental:'Payment',balance:'Balance payment',fee:'Extra charge',refund:'Refund to customer'};
+const emailLabels={booking:'Order confirmation',pickup:'Handover confirmation',payment:'Payment',deposit:'Security deposit',return:'Equipment return',settlement:'Settlement'};
 export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions=true,nextAction}){
  const [data,setData]=useState(null),[error,setError]=useState(''),[form,setForm]=useState(null),[busy,setBusy]=useState(false),[settings,setSettings]=useState(null),[history,setHistory]=useState(null);
  const [notice,setNotice]=useState('');
@@ -27,6 +27,7 @@ export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions
   catch(e){setError(e.message);}finally{setBusy(false);}
  }
  const whatsappUpdates=data?getOrderWhatsAppUpdates(data,settings?.businessName):[];
+ const hasRentalItems=data&&(data.hasRentalItems??data.items.some(item=>item.itemType!=='sale'));
  if(feeWaiver)return <LateFeeWaiverDialog record={feeWaiver} orderNo={data.orderNo} onClose={()=>{setFeeWaiver(null);load();}} onSaved={async message=>{
   setFeeWaiver(null);setNotice(message);await load();onSaved?.();
  }}/>;
@@ -39,8 +40,8 @@ export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions
  {notice&&<p className="notice" role="status">{notice}</p>}
  {data&&<><div className="bar"><p><b>{data.customer?.name}</b> · {data.customer?.phone} · {data.status}<br/><small>Placed by: <strong>{data.placedByName||'Not recorded'}</strong></small></p>{nextAction?.(data)}</div>
  {!nextAction&&data.status==='settlement_pending'&&can(me,'returns.write')&&<button onClick={()=>setSettling(true)}>Complete settlement</button>}
- <div className="metric-row"><p>Pickup <b>{formatPickup(data)}</b></p><p>Return <b>{formatReturn(data)}</b></p><p>Rental total <b>{lkr(data.totalAmount)}</b></p><p>Rental balance <b>{lkr(data.status==='cancelled'?0:data.totalAmount-data.paid)}</b></p></div>
- <ResponsiveTable><thead><tr><th>Item</th><th>Qty</th><th>Returned</th><th>Unit codes</th><th>Amount</th></tr></thead><tbody>{data.items.map(i=><tr key={i._id}><td>{i.equipment?.name}</td><td>{i.quantity}</td><td>{i.returnedQuantity||0}</td><td>{i.unitAssignments?.length?i.unitAssignments.map(u=><small key={u.unit}><b>{u.code}</b> · {u.outcome}</small>):'Quantity tracked'}</td><td>{lkr(i.lineTotal)}</td></tr>)}</tbody></ResponsiveTable>
+ <div className="metric-row"><p>{data.fulfilledAt?'Handed over':'Pickup'} <b>{data.fulfilledAt?formatBusinessTime(data.fulfilledAt):formatPickup(data)}</b></p>{hasRentalItems&&<p>Rental return <b>{formatReturn(data)}</b></p>}<p>Order total <b>{lkr(data.totalAmount)}</b></p><p>Order balance <b>{lkr(data.status==='cancelled'?0:data.totalAmount-data.paid)}</b></p></div>
+ <ResponsiveTable><thead><tr><th>Item</th><th>Qty</th><th>Return / sale status</th><th>Unit codes</th><th>Amount</th></tr></thead><tbody>{data.items.map(i=><tr key={i._id}><td>{i.equipment?.name}<small>{i.itemType==='sale'?'Sale':'Rental'}</small></td><td>{i.quantity}</td><td>{i.itemType==='sale'?(data.fulfilledAt?'Sold':'Pending handover'):i.returnedQuantity||0}</td><td>{i.itemType==='sale'?'—':i.unitAssignments?.length?i.unitAssignments.map(u=><small key={u.unit}><b>{u.code}</b> · {u.outcome}</small>):'Quantity tracked'}</td><td>{lkr(i.lineTotal)}</td></tr>)}</tbody></ResponsiveTable>
  {data.returnFees?.some(record=>record.lateFee>0||record.waivedFee>0)&&<section className="card">
   <h3>Return late fees</h3>
   {data.returnFees.filter(record=>record.lateFee>0||record.waivedFee>0).map(record=><div className="bar" key={record._id}>
@@ -57,22 +58,22 @@ export default function OrderWorkspace({id,me,onClose,onSaved,showPaymentActions
    {whatsappUpdates.map(({key,label,url})=><a key={key} className="btn" href={url} target="_blank" rel="noopener noreferrer">{label}</a>)}
   </div>
  </details>}
- {(showPaymentActions||!can(me,'finance.view')&&!can(me,'payments.refund'))&&can(me,'payments.record')&&!['cancelled','settlement_pending'].includes(data.status)&&data.totalAmount>data.paid&&<button onClick={()=>open('rental',data.paid===0?'deposit':'balance')}>Record rental payment</button>}
+ {(showPaymentActions||!can(me,'finance.view')&&!can(me,'payments.refund'))&&can(me,'payments.record')&&!['cancelled','settlement_pending'].includes(data.status)&&data.totalAmount>data.paid&&<button onClick={()=>open('rental',data.paid===0?'deposit':'balance')}>Record payment</button>}
  {showPaymentActions&&['finance.view','payments.record','payments.refund'].some(permission=>can(me,permission))&&<details className="desk-actions"><summary>More payment actions</summary><div className="bar">
  {can(me,'payments.record')&&can(me,'payments.refund')&&data.status!=='cancelled'&&data.totalAmount<=data.paid&&<button onClick={()=>open('rental','balance')}>Record overpayment</button>}
- {can(me,'payments.record')&&['reserved','active'].includes(data.status)&&data.securityMethod==='money'&&<button onClick={()=>open('security','collect')}>Collect security deposit</button>}
- {can(me,'payments.refund')&&<><button onClick={()=>open('rental','refund')} disabled={data.paid<=0}>Record rental refund</button><button onClick={()=>open('security','refund')} disabled={data.securityHeld<=0}>Refund security deposit</button><button onClick={()=>open('security','apply')} disabled={data.securityHeld<=0||data.status==='cancelled'}>Apply deposit to rental balance</button></>}
- {(can(me,'finance.view')||can(me,'payments.record')||can(me,'payments.refund'))&&<button onClick={()=>api('/payments/deposits/'+id).then(setHistory).catch(e=>setError(e.message))}>Deposit history</button>}
+ {hasRentalItems&&can(me,'payments.record')&&['reserved','active'].includes(data.status)&&data.securityMethod==='money'&&<button onClick={()=>open('security','collect')}>Collect security deposit</button>}
+ {can(me,'payments.refund')&&<><button onClick={()=>open('rental','refund')} disabled={data.paid<=0}>Record refund</button>{hasRentalItems&&<><button onClick={()=>open('security','refund')} disabled={data.securityHeld<=0}>Refund security deposit</button><button onClick={()=>open('security','apply')} disabled={data.securityHeld<=0||data.status==='cancelled'}>Apply deposit to order balance</button></>}</>}
+ {hasRentalItems&&(can(me,'finance.view')||can(me,'payments.record')||can(me,'payments.refund'))&&<button onClick={()=>api('/payments/deposits/'+id).then(setHistory).catch(e=>setError(e.message))}>Deposit history</button>}
  </div></details>}
  {history&&<div className="notice">{history.history.length===0?'No security deposit transactions yet.':history.history.map(h=><p key={h._id}>{h.type}: {lkr(h.amount)} · {h.reason||h.method}</p>)}</div>}
  {form&&<form className="card" onSubmit={save}><h3>{form.mode==='security'?'Security deposit: '+form.type:labels[form.type]}</h3><label>Amount (LKR)<input type="number" min="0.01" step="0.01" required value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})}/></label>
  <label>Method<select value={form.method} onChange={e=>setForm({...form,method:e.target.value})}><option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option><option value="other">Other</option></select></label>
  <label>Reason / reference<input required={form.type==='refund'||form.type==='apply'||form.allowOverpayment} value={form.reason} onChange={e=>setForm({...form,reason:e.target.value})}/></label>
- {form.mode==='rental'&&form.type==='refund'&&data.status==='completed'&&Math.round((data.totalAmount-data.paid+Number(form.amount))*100)>0&&<label>Rental charge after refund<select required value={form.refundCorrection??''} onChange={e=>setForm({...form,refundCorrection:e.target.value})}><option value="">Choose an action</option><option value="reduce_charge">Reduce the charge and keep the order completed</option><option value="reopen">Keep the charge and reopen the balance</option></select></label>}
+ {form.mode==='rental'&&form.type==='refund'&&data.status==='completed'&&Math.round((data.totalAmount-data.paid+Number(form.amount))*100)>0&&<label>Order charge after refund<select required value={form.refundCorrection??''} onChange={e=>setForm({...form,refundCorrection:e.target.value})}><option value="">Choose an action</option><option value="reduce_charge">Reduce the charge and keep the order completed</option><option value="reopen">Keep the charge and reopen the balance</option></select></label>}
  {form.mode==='rental'&&form.type!=='refund'&&can(me,'payments.refund')&&<label className="check"><input type="checkbox" checked={form.allowOverpayment} onChange={e=>setForm({...form,allowOverpayment:e.target.checked})}/>Approve an overpayment (reason required)</label>}
  <div className="bar"><button type="button" onClick={()=>setForm(null)} disabled={busy}>Cancel</button><button className="btn" disabled={busy}>{busy?'Saving…':'Save transaction'}</button></div></form>}
- <SecurityDeposit key={data._id} order={data} me={me} onSaved={async()=>{await load();onSaved?.();}}/>
- {data.payments?.length>0&&<details className="desk-actions"><summary>Rental payment history</summary><ResponsiveTable><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Method / reference</th></tr></thead><tbody>{data.payments.map(p=><tr key={p._id}><td>{new Date(p.paidAt).toLocaleString('en-LK',{timeZone:'Asia/Colombo'})}</td><td>{labels[p.type]||p.type}</td><td>{p.type==='refund'?'-':''}{lkr(p.amount)}</td><td>{[p.method,p.reference].filter(Boolean).join(' · ')}</td></tr>)}</tbody></ResponsiveTable></details>}
+ {hasRentalItems&&<SecurityDeposit key={data._id} order={data} me={me} onSaved={async()=>{await load();onSaved?.();}}/>}
+ {data.payments?.length>0&&<details className="desk-actions"><summary>Payment history</summary><ResponsiveTable><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Method / reference</th></tr></thead><tbody>{data.payments.map(p=><tr key={p._id}><td>{new Date(p.paidAt).toLocaleString('en-LK',{timeZone:'Asia/Colombo'})}</td><td>{labels[p.type]||p.type}</td><td>{p.type==='refund'?'-':''}{lkr(p.amount)}</td><td>{[p.method,p.reference].filter(Boolean).join(' · ')}</td></tr>)}</tbody></ResponsiveTable></details>}
  <details className="desk-actions"><summary>Invoices and sharing</summary>{data.invoices.map(i=><div className="notice" key={i._id}><b>{i.invoiceNo}</b> · {i.status} · {lkr(i.total)}<div className="bar"><button onClick={()=>pdf(i)}>PDF / print</button>{i.status!=='void'&&<><button onClick={()=>sendInvoiceWhatsApp(i._id)}>WhatsApp</button>{settings?.emailConfigured&&<button onClick={()=>api(`/invoices/${i._id}/email`,{method:'POST'}).catch(e=>setError(e.message))}>Email PDF</button>}</>}</div>{i.status==='issued'&&can(me,'payments.refund')&&<details className="desk-actions"><summary>More invoice actions</summary><button onClick={()=>{if(confirm('Void this invoice? Payment records are kept.'))api(`/invoices/${i._id}/void`,{method:'PATCH'}).then(load).catch(e=>setError(e.message));}}>Void invoice</button></details>}</div>)}
  {!data.invoices.some(i=>i.status!=='void')&&data.status!=='cancelled'&&can(me,'payments.record')&&<button onClick={()=>api('/invoices',{method:'POST',body:{order:id,requestId:crypto.randomUUID()}}).then(load).catch(e=>setError(e.message))}>Create invoice</button>}
  </details>

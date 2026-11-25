@@ -9,10 +9,12 @@ import OrderWorkspace from '../components/OrderWorkspace.jsx';
 import { can } from '../permissions.js';
 import {PageIntro,EmptyState} from '../components/UI.jsx';
 import Icon from '../components/Icon.jsx';
-import { formatPickup, formatReturn } from '../businessTime.js';
+import { formatPickup, formatReturn, formatBusinessTime } from '../businessTime.js';
 import { PickupDialog, ExtendDialog } from './Rentals.jsx';
 import { ReturnDialog } from './Returns.jsx';
 import {emailStatusMessage} from '../emailStatus.js';
+
+const hasRentals=order=>order.hasRentalItems??order.items?.some(item=>item.itemType!=='sale')??true;
 
 export default function Orders({ me, maintenance=false }) {
   const [params]=useSearchParams();
@@ -53,8 +55,8 @@ export default function Orders({ me, maintenance=false }) {
   const actionSaved=message=>{setHandover(null);setReceiving(null);setExtending(null);setBookingNotice(message);load();};
   const nextAction=o=>{
     if(o.status==='reserved'&&o.customer?.detailsPending&&can(me,'customers.write'))return <button onClick={()=>{setWorkspace(null);setDetails(o.customer);}}>Add customer details</button>;
-    if(o.status==='reserved'&&!o.customer?.detailsPending&&can(me,'rentals.write'))return <button className="btn" onClick={()=>{setWorkspace(null);setBookingNotice('');setHandover(o);}}>Start pickup</button>;
-    if(o.status==='active'&&can(me,'returns.write'))return <button className="btn" onClick={()=>{setWorkspace(null);setBookingNotice('');setReceiving(o);}}>Receive return</button>;
+    if(o.status==='reserved'&&!o.customer?.detailsPending&&can(me,'rentals.write'))return <button className="btn" onClick={()=>{setWorkspace(null);setBookingNotice('');setHandover(o);}}>{hasRentals(o)?'Start pickup':'Hand over sale'}</button>;
+    if(o.status==='active'&&hasRentals(o)&&can(me,'returns.write'))return <button className="btn" onClick={()=>{setWorkspace(null);setBookingNotice('');setReceiving(o);}}>Receive return</button>;
     if(o.status==='settlement_pending'&&can(me,'returns.write'))return <button className="btn" onClick={()=>{setWorkspace(null);setBookingNotice('');setReceiving(o);}}>Complete settlement</button>;
     return null;
   };
@@ -88,9 +90,9 @@ export default function Orders({ me, maintenance=false }) {
           <tbody>{orders.map(o => (
             <tr key={o._id}>
               <td data-l="Order"><b>{o.orderNo}</b></td><td data-l="Customer">{o.customer?.name}{o.customer?.detailsPending && <><br /><span className="tag fair">Details pending</span></>}</td>
-              <td data-l="Pickup">{formatPickup(o)}</td><td data-l="Return">{formatReturn(o)}</td>
-              <td data-l="Items">{o.items.map(i => `${i.quantity}× ${i.equipment?.name}`).join(', ')}</td>
-              <td data-l="Total">{lkr(o.totalAmount)}<small>{o.periods}× 36h</small></td>
+              <td data-l="Pickup">{o.fulfilledAt?formatBusinessTime(o.fulfilledAt):formatPickup(o)}</td><td data-l="Return">{hasRentals(o)?formatReturn(o):'—'}</td>
+              <td data-l="Items">{o.items.map(i => `${i.quantity}× ${i.equipment?.name}${i.itemType==='sale'?' (sale)':''}`).join(', ')}</td>
+              <td data-l="Total">{lkr(o.totalAmount)}{hasRentals(o)?<small>Rental period · {o.periods}× 36h</small>:<small>Sale</small>}</td>
               <td data-l="Status"><span className={'tag ' + (o.status === 'cancelled' ? 'needs_repair' : o.status==='settlement_pending'?'fair':'')}>{o.status==='settlement_pending'?'Settlement pending':o.status}</span></td>
               <td className="acts">
                 {nextAction(o)}<button onClick={()=>setWorkspace(o._id)}>View order</button>
@@ -99,7 +101,7 @@ export default function Orders({ me, maintenance=false }) {
                     <button onClick={()=>setEditing(o)}>Change booking</button><button onClick={()=>cancel(o)}>Cancel booking</button>
                   </div>
                 </details>}
-                {!maintenance&&o.status==='active'&&can(me,'rentals.write')&&<details className="desk-actions"><summary>More actions</summary><button onClick={()=>setExtending(o)}>Extend rental</button></details>}
+                {!maintenance&&o.status==='active'&&hasRentals(o)&&can(me,'rentals.write')&&<details className="desk-actions"><summary>More actions</summary><button onClick={()=>setExtending(o)}>Extend rental</button></details>}
                 {maintenance&&o.status==='completed'&&me?.role==='owner'&&<button onClick={()=>openPastDelete(o)}>Delete permanently</button>}
               </td>
             </tr>))}</tbody>

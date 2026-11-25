@@ -14,6 +14,7 @@ export function invoicePdf({ st, inv, items, paid }) {
     doc.on('data', c => chunks.push(c)); doc.on('end', () => resolve(Buffer.concat(chunks))); doc.on('error', reject);
     const balance = Math.max(0, inv.total - paid), done = balance === 0, voided = inv.status === 'void';
     const green = '#173a2f';
+    const hasRentals = items.some(item=>item.itemType!=='sale');
     const planned = inv.order.pickupDate && ['reserved', 'cancelled'].includes(inv.order.status);
     const pickup = planned ? inv.order.pickupDate : when(inv.order.startDate);
     const returnTime = planned ? (inv.order.status === 'reserved' ? '36 hours after pickup' : 'Cancelled') : when(inv.order.endDate);
@@ -27,7 +28,7 @@ export function invoicePdf({ st, inv, items, paid }) {
     doc.fillColor(green).font('Helvetica-Bold').fontSize(9).text('BILL TO', 40, 140).text('ORDER', 330, 140);
     doc.fillColor('#222').font('Helvetica').fontSize(10)
       .text([inv.customer.name, inv.customer.phone].filter(Boolean).join('\n'), 40, 154, { width: 270 })
-      .text([inv.order.orderNo, 'Pickup: ' + pickup, 'Return: ' + returnTime].join('\n'), 330, 154, { width: 225 });
+      .text([inv.order.orderNo, 'Pickup: ' + pickup, ...(hasRentals?['Return: ' + returnTime]:[])].join('\n'), 330, 154, { width: 225 });
 
     doc.roundedRect(40, 212, 515, 28, 6).fill(voided ? '#9b272c' : done ? '#2d7a4f' : '#d9922b');
     doc.fillColor(voided || done ? '#fff' : '#2a1b00').font('Helvetica-Bold').fontSize(11)
@@ -37,14 +38,16 @@ export function invoicePdf({ st, inv, items, paid }) {
     const x = { item: 48, qty: 300, rate: 340, per: 425, amt: 470 };
     doc.rect(40, y, 515, 22).fill(green);
     doc.fillColor('#fff').font('Helvetica-Bold').fontSize(9).text('Item', x.item, y + 7).text('Qty', x.qty, y + 7)
-      .text('Rate / 36h', x.rate, y + 7).text('Periods', x.per, y + 7).text('Amount', x.amt, y + 7, { width: 77, align: 'right' });
+      .text('Unit rate', x.rate, y + 7).text('Billing', x.per, y + 7).text('Amount', x.amt, y + 7, { width: 77, align: 'right' });
     y += 30;
     doc.font('Helvetica').fillColor('#222').fontSize(10);
     for (const i of items) {
-      if (y > 700) { doc.addPage(); y = 50; }
-      doc.text(i.equipment?.name || '', x.item, y, { width: 245 }).text(String(i.quantity), x.qty, y).text(lkr(i.periodRate), x.rate, y, { width: 80 })
-        .text(String(i.periods), x.per, y).text(lkr(i.lineTotal), x.amt, y, { width: 77, align: 'right' });
-      y += 22;
+      const sale=i.itemType==='sale',description=(i.equipment?.name||'')+'\n'+(sale?'Sale':'Rental');
+      const height=Math.max(34,doc.heightOfString(description,{width:235})+10);
+      if (y+height > 700) { doc.addPage(); y = 50; }
+      doc.text(description, x.item, y, { width: 235 }).text(String(i.quantity), x.qty, y).text(lkr(i.periodRate), x.rate, y, { width: 80 })
+        .text(sale?'Once':String(i.periods)+' ×36h', x.per, y, {width:47}).text(lkr(i.lineTotal), x.amt, y, { width: 77, align: 'right' });
+      y += height;
       doc.moveTo(40, y - 5).lineTo(555, y - 5).strokeColor('#ddd').stroke();
     }
     y += 10;

@@ -10,6 +10,10 @@ export async function stockSnapshot(id,session=null){
   const repairs=await Repair.find({equipment:id,status:'open'}).session(session).lean();
   let out=0;const events=[];
   for(const line of lines){const order=orders.find(o=>String(o._id)===String(line.order)),quantity=line.quantity-(line.returnedQuantity||0);
+    if(line.itemType==='sale'){
+      if(order.status==='reserved')events.push([0,line.quantity],[Infinity,-line.quantity]);
+      continue;
+    }
     if(order.status==='active')out+=quantity;
     if(quantity>0)events.push([order.status==='active'?0:+order.startDate,quantity],[order.status==='active'?Infinity:reservedEnd(order),-quantity]);
   }

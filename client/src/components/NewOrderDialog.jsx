@@ -21,6 +21,7 @@ export default function NewOrderDialog({ me, onClose, onSaved, draft }) {
   const [confirmDifferent, setConfirmDifferent] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [start, setStart] = useState(draft?.start??''), [end, setEnd] = useState(draft?.end??'');
+  const [salesOnly, setSalesOnly] = useState(false);
   const [lines, setLines] = useState(() => [{...newLine(),...draft?.item}]);
   const [availability, setAvailability] = useState(null);
   const [advance, setAdvance] = useState(''), [advanceMethod, setAdvanceMethod] = useState('');
@@ -41,21 +42,24 @@ export default function NewOrderDialog({ me, onClose, onSaved, draft }) {
     return () => { active = false; clearTimeout(timer); };
   }, [lookupKey, lookupAttempt]);
 
-  const range = start && end && start < end ? `${start}/${end}` : '';
+  const range = salesOnly ? start && `sale/${start}` : start && end && start < end ? `${start}/${end}` : '';
   useEffect(() => {
     if (!range) return;
     let active = true;
-    const params = new URLSearchParams({ start: businessISO(start), end: businessISO(end) });
+    const params = new URLSearchParams(salesOnly ? { start: businessISO(start), salesOnly:'true' }
+      : { start: businessISO(start), end: businessISO(end) });
     api('/availability?' + params).then(data => { if (active) setAvailability({ range, ...data }); })
       .catch(e => { if (active) setAvailability({ range, error: e.message }); });
     return () => { active = false; };
-  }, [range, start, end]);
+  }, [range, start, end, salesOnly]);
 
   const dates = availability?.range === range ? availability : null;
   const items = dates?.items || [];
   const chosen = lines.map(line => items.find(i => i._id === line.equipment));
   const itemsReady = !!dates?.items && lines.every((l, i) => chosen[i] && Number.isInteger(+l.quantity) && +l.quantity >= 1 && +l.quantity <= chosen[i].available);
-  const total = Math.round(chosen.reduce((sum, item, i) => sum + (item ? item.periodRate * (+lines[i].quantity || 0) * dates.periods : 0), 0) * 100) / 100;
+  const rentalTotal = Math.round(chosen.reduce((sum, item, i) => sum + (item && item.itemType!=='sale' ? item.periodRate * (+lines[i].quantity || 0) * dates.periods : 0), 0) * 100) / 100;
+  const salesTotal = Math.round(chosen.reduce((sum, item, i) => sum + (item?.itemType==='sale' ? item.sellingPrice * (+lines[i].quantity || 0) : 0), 0) * 100) / 100;
+  const total = Math.round((rentalTotal + salesTotal) * 100) / 100;
   const lookupResult = lookup?.key === lookupKey ? lookup : null;
   const existing = lookupResult?.matches?.find(c => c.nic?.toUpperCase() === customer.nic.toUpperCase());
   const incompleteMatches = existing ? [] : lookupResult?.matches?.filter(c => !c.nic?.trim()) || [];
@@ -78,7 +82,7 @@ export default function NewOrderDialog({ me, onClose, onSaved, draft }) {
       const saved = await api('/orders', { method: 'POST', body: {
         customerDetails: { nic: customer.nic, name: contact.name, phone: contact.phone,
           email: contact.email, address: contact.address, confirmDifferentPerson: confirmDifferent },
-        startDate: businessISO(start), endDate: businessISO(end),
+        startDate: businessISO(start), ...(!salesOnly ? {endDate:businessISO(end)} : {}),
         items: lines.map(({ equipment, quantity }) => ({ equipment, quantity: Number(quantity) })),
         requestId,
         advance: { amount: Number(advance), method: advanceMethod }
@@ -93,26 +97,32 @@ export default function NewOrderDialog({ me, onClose, onSaved, draft }) {
         <header><h2 id="new-order-title">New order</h2></header>
         <fieldset className="new-order-section" disabled={saving}>
           <legend>Order details</legend>
+          <label>Order contents<select value={salesOnly?'sale':'rental'} onChange={e=>{
+            setSalesOnly(e.target.value==='sale');setLines([newLine()]);setAvailability(null);setError('');
+          }}><option value="rental">Rental equipment, with optional sale items</option><option value="sale">Sale items only</option></select></label>
           <div className="new-order-grid">
             <label><span>Pickup date &amp; time<Required/></span><input required type="datetime-local" value={start} onChange={e => { setStart(e.target.value); setAvailability(null); }} /></label>
-            <label><span>Return date &amp; time<Required/></span><input required type="datetime-local" value={end} onChange={e => { setEnd(e.target.value); setAvailability(null); }} /></label>
+            {!salesOnly&&<label><span>Return date &amp; time<Required/></span><input required type="datetime-local" value={end} onChange={e => { setEnd(e.target.value); setAvailability(null); }} /></label>}
           </div>
-          <p>Sri Lanka time. Each rental period is 36 hours.</p>
-          {!range && <p>{start && end ? 'Return must be after pickup.' : 'Choose pickup and return times to check available items.'}</p>}
+          <p>{salesOnly?'Sri Lanka time. Sale items are charged once per item.':'Sri Lanka time. Each rental period is 36 hours. Sale items are charged once.'}</p>
+          {!range && <p>{salesOnly?'Choose the pickup time to check stock.':start && end ? 'Return must be after pickup.' : 'Choose pickup and return times to check available items.'}</p>}
           {range && !dates && <p role="status">Checking available items…</p>}
           {dates?.error && <p className="bad" role="alert">{dates.error}</p>}
           <div className="lines">
             {lines.map((line, i) => <div className="line new-order-line" key={line.key}>
               <label><span>{i === 0 ? 'Choose item' : `Item ${i + 1}`}<Required/></span><select required disabled={!dates?.items} value={line.equipment} onChange={e => setLine(line.key, { equipment: e.target.value, quantity: 1 })}>
-                <option value="">Select equipment</option>
+                <option value="">Select item</option>
                 {line.equipment && !chosen[i] && <option value={line.equipment} disabled>Unavailable for these dates</option>}
-                {items.map(item => <option key={item._id} value={item._id} disabled={item.available < 1 || lines.some(l => l.key !== line.key && l.equipment === item._id)}>{item.name} ({item.available} free) · {lkr(item.periodRate)} / 36h</option>)}
+                {items.map(item => <option key={item._id} value={item._id} disabled={item.available < 1 || lines.some(l => l.key !== line.key && l.equipment === item._id)}>{item.name} · {item.itemType==='sale'?'Sale':'Rental'} ({item.available} available) · {lkr(item.itemType==='sale'?item.sellingPrice:item.periodRate)}{item.itemType==='sale'?' each':' / 36h'}</option>)}
               </select></label>
               <label>Quantity<input required aria-label={`Quantity for item ${i + 1}`} type="number" min={1} max={chosen[i]?.available || undefined} step={1} disabled={!chosen[i]} value={line.quantity} onChange={e => setLine(line.key, { quantity: e.target.value })} /></label>
               {lines.length > 1 && <button type="button" aria-label={`Remove item ${i + 1}`} onClick={() => setLines(old => old.filter(l => l.key !== line.key))}>Remove</button>}
             </div>)}
             <button type="button" disabled={!itemsReady || lines.length >= 100 || !items.some(item => item.available > 0 && !lines.some(l => l.equipment === item._id))} onClick={() => setLines(old => [...old, newLine()])}>Add item</button>
-            {itemsReady && <p className="new-order-total">Rental total <strong>{lkr(total)}</strong> · {dates.periods} × 36h</p>}
+            {itemsReady && <><p className="new-order-total">Order total <strong>{lkr(total)}</strong></p>
+              {rentalTotal>0&&<p>Rental items · {lkr(rentalTotal)} · {dates.periods} × 36h</p>}
+              {salesTotal>0&&<p>Sale items · {lkr(salesTotal)}</p>}
+            </>}
           </div>
         </fieldset>
 
@@ -147,7 +157,7 @@ export default function NewOrderDialog({ me, onClose, onSaved, draft }) {
         </fieldset>
 
         <fieldset className="new-order-section" disabled={saving}>
-          <legend>Rental advance<Required/></legend>
+          <legend>{salesOnly?'Order payment':'Order advance'}<Required/></legend>
           <div className="new-order-grid">
             <label><span>Advance received (LKR)<Required/></span><input required type="number" min="0.01" max={itemsReady ? total : undefined} step="0.01" value={advance} onChange={e => setAdvance(e.target.value)} /></label>
             <label><span>Payment method<Required/></span><select required value={advanceMethod} onChange={e => setAdvanceMethod(e.target.value)}><option value="">Choose payment method</option><option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option><option value="card">Card</option><option value="other">Other</option></select></label>

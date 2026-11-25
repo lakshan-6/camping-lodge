@@ -10,6 +10,8 @@ export const Equipment = model('Equipment', new Schema({
   name: { type: String, required: true, trim: true },
   category: { type: String, required: true, trim: true },
   sku: { type: String, trim: true, unique: true, sparse: true },
+  itemType: { type: String, enum: ['rental', 'sale'], default: 'rental' },
+  sellingPrice: { type: Number, min: 0, default: 0 },
   totalQuantity: { type: Number, required: true, min: 0, default: 0 },
   periodRate: { type: Number, required: true, min: 0 },  // LKR per 36-hour period
   deposit: { type: Number, min: 0, default: 0 },          // LKR
@@ -44,6 +46,7 @@ export const Order = model('Order', new Schema({
   customer: ref('Customer', { required: true }),
   pickupDate: String,
   plannedReturnDate: String,
+  fulfilledAt: Date,
   startDate: { type: Date, required: true },
   endDate: { type: Date, required: true },
   status: { type: String, enum: ['reserved', 'active', 'settlement_pending', 'completed', 'cancelled'], default: 'reserved' },
@@ -64,6 +67,7 @@ export const OrderItem = model('OrderItem', new Schema({
   order: ref('Order', { required: true, index: true }),
   equipment: ref('Equipment', { required: true, index: true }),
   quantity: { type: Number, required: true, min: 1 },
+  itemType: { type: String, enum: ['rental', 'sale'], default: 'rental' },
   periodRate: { type: Number, required: true },
   periods: { type: Number, required: true, min: 1 },
   lineTotal: { type: Number, required: true },
@@ -107,6 +111,7 @@ export const Payment = model('Payment', new Schema({
   order: ref('Order', { required: true }),
   invoice: ref('Invoice'),
   amount: { type: Number, required: true, min: 0 },
+  saleAmount: { type: Number, min: 0, default: 0 },
   method: { type: String, enum: ['cash', 'bank_transfer', 'card', 'other'], default: 'cash' },
   type: { type: String, enum: ['deposit', 'rental', 'balance', 'refund', 'fee'], default: 'rental' },
   paidAt: { type: Date, default: Date.now },
@@ -124,7 +129,7 @@ export const Invoice = model('Invoice', new Schema({
 
 export const InventoryTransaction = model('InventoryTransaction', new Schema({
   equipment: ref('Equipment', { required: true, index: true }),
-  type: { type: String, enum: ['initial_stock', 'adjustment', 'rented_out', 'returned', 'damaged', 'lost', 'repaired'], required: true },
+  type: { type: String, enum: ['initial_stock', 'adjustment', 'rented_out', 'sold', 'returned', 'damaged', 'lost', 'repaired'], required: true },
   quantity: { type: Number, required: true },  // signed change in stock
   reference: String,                           // e.g. order or return id
   note: String,

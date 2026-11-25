@@ -47,18 +47,66 @@ export async function syncInvoice(order, session, create = false) {
   } else if (invoice) { invoice.set({ subtotal, fees: order.totalAmount-subtotal, total: order.totalAmount, status }); await invoice.save({session}); }
   return invoice;
 }
+async function saleSubtotalCents(orderId, session) {
+  const lines = await OrderItem.find({ order: orderId, itemType: 'sale' }).select('lineTotal').session(session).lean();
+  return lines.reduce((sum, line) => sum + Math.round(line.lineTotal * 100), 0);
+}
+
+function allocateSaleCents(type, amountCents, paidCents, salesPaidCents, saleTotalCents) {
+  const paidSales = Math.max(0, Math.min(paidCents, salesPaidCents));
+  if (type !== 'refund') return Math.min(amountCents, Math.max(0, saleTotalCents - paidSales));
+  if (paidCents <= 0) return 0;
+  const paidRental = paidCents - paidSales;
+  return Math.min(paidSales, Math.max(amountCents - paidRental,
+    Math.round(amountCents * paidSales / paidCents)));
+}
+
+export async function rebalancePaymentAllocations(order, user, session) {
+  if (order.status !== 'reserved' || order.fulfilledAt) throw httpErr(409, 'Only uncollected bookings can change payment allocations');
+  const saleTotal = await saleSubtotalCents(order._id, session);
+  const payments = await Payment.find({ order: order._id }).sort({ paidAt: 1, createdAt: 1, _id: 1 }).session(session);
+  let paid = 0, salesPaid = 0;
+  const changes = [];
+  for (const payment of payments) {
+    const amount = Math.round(payment.amount * 100);
+    const allocatedSale = allocateSaleCents(payment.type, amount, paid, salesPaid, saleTotal);
+    const sign = payment.type === 'refund' ? -1 : 1;
+    paid += sign * amount;
+    salesPaid += sign * allocatedSale;
+    if (Math.round((payment.saleAmount || 0) * 100) === allocatedSale) continue;
+    changes.push({ payment: payment._id, before: payment.saleAmount || 0, after: allocatedSale / 100 });
+    payment.saleAmount = allocatedSale / 100;
+    await payment.save({ session, preserveTimestamps: true, timestamps: false });
+  }
+  if (changes.length) {
+    await audit(session, user, 'payment.allocations_reclassified', order._id,
+      { allocations: changes.map(change => ({ payment: change.payment, saleAmount: change.before })) },
+      { allocations: changes.map(change => ({ payment: change.payment, saleAmount: change.after })),
+        reason: 'Uncollected booking items changed' });
+  }
+  return changes.length;
+}
+
 export async function recordPayment(order, body, user, session) {
   assertPermission(user, body.type === 'refund' ? 'payments.refund' : 'payments.record');
-  const amount = money(body.amount), paid = await paidTotal(order._id,session);
+  const amount = money(body.amount);
+  const history = await Payment.find({ order: order._id }).select('amount saleAmount type').session(session).lean();
+  let paidCents = 0, salesPaidCents = 0;
+  for (const payment of history) {
+    const sign = payment.type === 'refund' ? -1 : 1;
+    paidCents += sign * Math.round(payment.amount * 100);
+    salesPaidCents += sign * Math.round((payment.saleAmount || 0) * 100);
+  }
+  const paid = paidCents / 100;
   const type = ['deposit','rental','balance','fee','refund'].includes(body.type) ? body.type : 'balance';
   if (type === 'refund') {
     if (!body.reason?.trim()) throw httpErr(400, 'Enter a reason for the refund');
-    if (amount > paid) throw httpErr(409, 'Refund cannot exceed net rental payments received');
+    if (amount > paid) throw httpErr(409, 'Refund cannot exceed net payments received');
     const newBalance = rentalBalanceDue(order.totalAmount, paid - amount);
     if (order.status === 'completed' && newBalance > 0) {
       const before = { status: order.status, totalAmount: order.totalAmount };
       if (body.refundCorrection === 'reduce_charge') {
-        order.totalAmount = money(order.totalAmount - newBalance, 'Corrected rental total', true);
+        order.totalAmount = money(order.totalAmount - newBalance, 'Corrected order total', true);
       } else if (body.refundCorrection === 'reopen') {
         order.status = 'settlement_pending';
       } else {
@@ -75,17 +123,17 @@ export async function recordPayment(order, body, user, session) {
       assertPermission(user,'payments.refund');
     }
   }
-  const [payment] = await Payment.create([{ order: order._id, amount, type, method: methodOf(body.method), reference: [body.reference,body.reason].filter(Boolean).join(' - ') }], {session});
+  const amountCents = Math.round(amount * 100);
+  const saleTotal = type === 'refund' ? 0 : await saleSubtotalCents(order._id, session);
+  const saleCents = allocateSaleCents(type, amountCents, paidCents, salesPaidCents, saleTotal);
+  const [payment] = await Payment.create([{ order: order._id, amount, saleAmount: saleCents / 100,
+    type, method: methodOf(body.method), reference: [body.reference,body.reason].filter(Boolean).join(' - ') }], {session});
   if (order.status === 'cancelled' && order.cancellation) { order.cancellation.refundPending = Math.max(0,paid-(type==='refund'?amount:-amount)); await order.save({session}); }
   await closeSettledOrder(order,session);
   await syncInvoice(order,session);
   return payment;
 }
 export async function priceItems(body, session, exclude, lockedRates=new Map()) {
-  const window = bookingWindow(body.pickupDate,body.startDate,body.endDate);
-  const { start,end,periods } = window;
-  const { plannedReturnDate } = body;
-  if(plannedReturnDate!==undefined)dayRange(window.pickupDate,plannedReturnDate);
   if (!Array.isArray(body.items) || !body.items.length || body.items.length>100) throw httpErr(400,'Choose at least one item');
   const wanted = new Map();
   for (const i of body.items) {
@@ -93,20 +141,35 @@ export async function priceItems(body, session, exclude, lockedRates=new Map()) 
     wanted.set(String(i.equipment), (wanted.get(String(i.equipment)) || 0)+units(i.quantity));
   }
   await Equipment.updateMany({ _id: { $in: [...wanted.keys()] } }, { $inc: { revision: 1 } }, {session});
+  const selected=await Equipment.find({_id:{$in:[...wanted.keys()]}}).session(session);
+  const saleOnly=selected.length===wanted.size&&selected.every(item=>item.itemType==='sale');
+  let window;
+  if(saleOnly){
+    const start=body.pickupDate!==undefined?dayRange(body.pickupDate).$gte:new Date(body.startDate??Date.now());
+    if(!Number.isFinite(+start))throw httpErr(400,'Choose a valid pickup time');
+    const end=new Date(+start+1);
+    window={start,end,reservedUntil:end,periods:1,...(body.pickupDate?{pickupDate:body.pickupDate}:{})};
+  }else window=bookingWindow(body.pickupDate,body.startDate,body.endDate);
+  const {start,periods}=window;
+  const plannedReturnDate=saleOnly?undefined:body.plannedReturnDate;
+  if(plannedReturnDate!==undefined)dayRange(window.pickupDate,plannedReturnDate);
   const avail = new Map((await availability(start,window.reservedUntil,exclude,session)).map(i=>[String(i._id),i]));
   let total=0,deposit=0;
   const lines = [...wanted].map(([id,quantity])=>{
     const item=avail.get(id);
     if (!item || quantity>item.available) throw httpErr(409,`${item?.name || 'Equipment'} is not available in the requested quantity`);
-    const periodRate=lockedRates.get(id)??item.periodRate;
-    const lineTotal=money(quantity*periodRate*periods,'Rental total',true);
-    total+=lineTotal;deposit+=quantity*item.deposit;
-    return { equipment:id,quantity,periodRate,periods,lineTotal,returnedQuantity:0 };
+    const itemType=item.itemType==='sale'?'sale':'rental';
+    const linePeriods=itemType==='sale'?1:periods;
+    const periodRate=lockedRates.get(id)??(itemType==='sale'?item.sellingPrice:item.periodRate);
+    const lineTotal=money(quantity*periodRate*linePeriods,'Order total',true);
+    total+=lineTotal;
+    if(itemType==='rental')deposit+=quantity*item.deposit;
+    return {equipment:id,itemType,quantity,periodRate,periods:linePeriods,lineTotal,returnedQuantity:0};
   });
-  return { ...window,plannedReturnDate,lines,total:money(total,'Total',true),deposit:money(deposit,'Deposit',true) };
+  return {...window,plannedReturnDate,hasRentalItems:!saleOnly,lines,total:money(total,'Total',true),deposit:money(deposit,'Deposit',true)};
 }
 export async function remainingLines(order, session = null) {
-  return (await OrderItem.find({order}).populate('equipment','name checklist trackUnits').session(session)).map(i=>({
+  return (await OrderItem.find({order,itemType:{$ne:'sale'}}).populate('equipment','name checklist trackUnits').session(session)).map(i=>({
     ...i.toObject(), remaining: Math.max(0,i.quantity-(i.returnedQuantity||0))
   }));
 }

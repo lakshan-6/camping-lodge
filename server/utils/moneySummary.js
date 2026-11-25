@@ -11,7 +11,8 @@ const appliedSecurityPayment = payment => payment.type === 'balance'
 const cancellationAction = value => value?.cancellation?.action ?? value?.['cancellation.action'];
 
 function methodTotals(method) {
-  return { method, rentalReceipts: 0, rentalRefunds: 0, securityCollected: 0, securityRefunds: 0, expenses: 0 };
+  return { method, rentalReceipts: 0, salesReceipts: 0, rentalRefunds: 0, salesRefunds: 0,
+    rentalNet: 0, salesNet: 0, securityCollected: 0, securityRefunds: 0, expenses: 0 };
 }
 
 export async function cancellationActions(orders, session = null) {
@@ -36,7 +37,7 @@ export async function moneySummary({ from, to } = {}) {
 
   return transaction(async session => {
     // Read every retained ledger row so current balances include older bookings.
-    const payments = await Payment.find().select('order amount type method paidAt reference').session(session).lean();
+    const payments = await Payment.find().select('order amount saleAmount type method paidAt reference').session(session).lean();
     const deposits = await DepositTransaction.find().select('order amount type method createdAt').session(session).lean();
     const orders = await Order.find().select('status totalAmount cancellation.action').session(session).lean();
     const expenses = await Expense.find(range ? { spentAt: range } : {}).select('amount method').session(session).lean();
@@ -51,10 +52,21 @@ export async function moneySummary({ from, to } = {}) {
       const order = String(payment.order);
       const change = payment.type === 'refund' ? -amount : amount;
       paidByOrder.set(order, (paidByOrder.get(order) || 0) + change);
-      if (!inPeriod(payment.paidAt) || appliedSecurityPayment(payment)) continue;
+      if (!inPeriod(payment.paidAt)) continue;
+      const saleAmount = Math.max(0, Math.min(amount, cents(payment.saleAmount)));
+      const rentalAmount = amount - saleAmount;
       const totals = methods.get(methodOf(payment.method));
-      if (payment.type === 'refund') totals.rentalRefunds += amount;
-      else totals.rentalReceipts += amount;
+      const sign = payment.type === 'refund' ? -1 : 1;
+      totals.salesNet += sign * saleAmount;
+      totals.rentalNet += sign * rentalAmount;
+      if (appliedSecurityPayment(payment)) continue;
+      if (payment.type === 'refund') {
+        totals.rentalRefunds += rentalAmount;
+        totals.salesRefunds += saleAmount;
+      } else {
+        totals.rentalReceipts += rentalAmount;
+        totals.salesReceipts += saleAmount;
+      }
     }
 
     for (const deposit of deposits) {
@@ -91,21 +103,34 @@ export async function moneySummary({ from, to } = {}) {
       for (const key of Object.keys(totals)) {
         if (key !== 'method') totals[key] += row[key];
       }
-      const netMovement = row.rentalReceipts - row.rentalRefunds + row.securityCollected - row.securityRefunds - row.expenses;
-      return Object.fromEntries(Object.entries({ ...row, netMovement }).map(([key, value]) =>
+      const totalReceipts = row.rentalReceipts + row.salesReceipts;
+      const totalRefunds = row.rentalRefunds + row.salesRefunds;
+      const netPayments = row.rentalNet + row.salesNet;
+      const netMovement = totalReceipts - totalRefunds + row.securityCollected - row.securityRefunds - row.expenses;
+      return Object.fromEntries(Object.entries({ ...row, totalReceipts, totalRefunds, netPayments, netMovement }).map(([key, value]) =>
         [key, key === 'method' ? value : value / 100]));
     });
-    const { rentalReceipts, rentalRefunds, securityCollected, securityRefunds } = totals;
+    const { rentalReceipts, salesReceipts, rentalRefunds, salesRefunds, rentalNet, salesNet, securityCollected, securityRefunds } = totals;
+    const totalReceipts = rentalReceipts + salesReceipts;
+    const totalRefunds = rentalRefunds + salesRefunds;
+    const netPayments = rentalNet + salesNet;
     return {
       period: { from: hasRange ? from : null, to: hasRange ? to : null },
       rentalReceipts: rentalReceipts / 100,
+      salesReceipts: salesReceipts / 100,
       rentalRefunds: rentalRefunds / 100,
+      salesRefunds: salesRefunds / 100,
+      totalReceipts: totalReceipts / 100,
+      totalRefunds: totalRefunds / 100,
+      rentalNet: rentalNet / 100,
+      salesNet: salesNet / 100,
+      netPayments: netPayments / 100,
       securityApplied: securityApplied / 100,
       expenses: totals.expenses / 100,
-      receiptsLessExpenses: (rentalReceipts - rentalRefunds + securityApplied - totals.expenses) / 100,
+      receiptsLessExpenses: (netPayments - totals.expenses) / 100,
       securityCollected: securityCollected / 100,
       securityRefunds: securityRefunds / 100,
-      netMovement: (rentalReceipts - rentalRefunds + securityCollected - securityRefunds - totals.expenses) / 100,
+      netMovement: (totalReceipts - totalRefunds + securityCollected - securityRefunds - totals.expenses) / 100,
       byMethod,
       current: { outstanding: outstanding / 100, refundDue: refundDue / 100, securityHeld: securityHeld / 100 },
     };
