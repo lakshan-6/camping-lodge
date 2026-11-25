@@ -4,6 +4,7 @@ import { businessISO } from '../businessTime.js';
 import { can } from '../permissions.js';
 import CustomerDetails from '../pages/CustomerDetails.jsx';
 import { NicInput, PhoneInput } from './ContactInputs.jsx';
+import EquipmentPicker from './EquipmentPicker.jsx';
 
 const newLine = () => ({ key: crypto.randomUUID(), equipment: '', quantity: 1 });
 const emptyCustomer = { nic: '', name: '', phone: '', email: '', address: '' };
@@ -56,7 +57,7 @@ export default function NewOrderDialog({ me, onClose, onSaved, draft }) {
   const dates = availability?.range === range ? availability : null;
   const items = dates?.items || [];
   const chosen = lines.map(line => items.find(i => i._id === line.equipment));
-  const itemsReady = !!dates?.items && lines.every((l, i) => chosen[i] && Number.isInteger(+l.quantity) && +l.quantity >= 1 && +l.quantity <= chosen[i].available);
+  const itemsReady = !!dates?.items && new Set(lines.map(l=>l.equipment)).size === lines.length && lines.every((l, i) => chosen[i] && Number.isInteger(+l.quantity) && +l.quantity >= 1 && +l.quantity <= chosen[i].available);
   const rentalTotal = Math.round(chosen.reduce((sum, item, i) => sum + (item && item.itemType!=='sale' ? item.periodRate * (+lines[i].quantity || 0) * dates.periods : 0), 0) * 100) / 100;
   const salesTotal = Math.round(chosen.reduce((sum, item, i) => sum + (item?.itemType==='sale' ? item.sellingPrice * (+lines[i].quantity || 0) : 0), 0) * 100) / 100;
   const total = Math.round((rentalTotal + salesTotal) * 100) / 100;
@@ -110,11 +111,16 @@ export default function NewOrderDialog({ me, onClose, onSaved, draft }) {
           {dates?.error && <p className="bad" role="alert">{dates.error}</p>}
           <div className="lines">
             {lines.map((line, i) => <div className="line new-order-line" key={line.key}>
-              <label><span>{i === 0 ? 'Choose item' : `Item ${i + 1}`}<Required/></span><select required disabled={!dates?.items} value={line.equipment} onChange={e => setLine(line.key, { equipment: e.target.value, quantity: 1 })}>
-                <option value="">Select item</option>
-                {line.equipment && !chosen[i] && <option value={line.equipment} disabled>Unavailable for these dates</option>}
-                {items.map(item => <option key={item._id} value={item._id} disabled={item.available < 1 || lines.some(l => l.key !== line.key && l.equipment === item._id)}>{item.name} · {item.itemType==='sale'?'Sale':'Rental'} ({item.available} available) · {lkr(item.itemType==='sale'?item.sellingPrice:item.periodRate)}{item.itemType==='sale'?' each':' / 36h'}</option>)}
-              </select></label>
+              <EquipmentPicker label={i === 0 ? 'Choose item' : `Item ${i + 1}`} required
+                disabled={saving || !dates?.items} value={line.equipment}
+                placeholder={dates?.items ? 'Search items by name or SKU' : 'Choose dates first'}
+                items={[
+                  ...(line.equipment && !chosen[i] ? [{value:line.equipment,label:'Unavailable for these dates',disabled:true}] : []),
+                  ...items.map(item => ({value:item._id,searchText:`${item.name} ${item.sku || ''}`,
+                    label:`${item.name} · ${item.itemType==='sale'?'Sale':'Rental'} (${item.available} available) · ${lkr(item.itemType==='sale'?item.sellingPrice:item.periodRate)}${item.itemType==='sale'?' each':' / 36h'}`,
+                    disabled:item.available < 1 || lines.some(l => l.key !== line.key && l.equipment === item._id)}))
+                ]}
+                onChange={equipment => setLine(line.key, { equipment, quantity: 1 })}/>
               <label>Quantity<input required aria-label={`Quantity for item ${i + 1}`} type="number" min={1} max={chosen[i]?.available || undefined} step={1} disabled={!chosen[i]} value={line.quantity} onChange={e => setLine(line.key, { quantity: e.target.value })} /></label>
               {lines.length > 1 && <button type="button" aria-label={`Remove item ${i + 1}`} onClick={() => setLines(old => old.filter(l => l.key !== line.key))}>Remove</button>}
             </div>)}

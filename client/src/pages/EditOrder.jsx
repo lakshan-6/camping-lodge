@@ -1,12 +1,13 @@
 import {businessISO,businessInput} from '../businessTime.js';
 import { useEffect, useState } from 'react';
 import { api, lkr } from '../api.js';
+import EquipmentPicker from '../components/EquipmentPicker.jsx';
 
 export default function EditOrder({ order, onClose, onSaved }) {
   const dateOnly = !!order.pickupDate;
   const [start, setStart] = useState(() => order.pickupDate || businessInput(order.startDate));
   const [end, setEnd] = useState(() => dateOnly ? order.plannedReturnDate || '' : businessInput(order.endDate));
-  const [lines, setLines] = useState(order.items.map(i => ({ equipment: i.equipment._id, quantity: i.quantity })));
+  const [lines, setLines] = useState(() => order.items.map(i => ({ key: crypto.randomUUID(), equipment: i.equipment._id, quantity: i.quantity })));
   const [salesOnly, setSalesOnly] = useState(order.hasRentalItems===false || order.items.every(i=>i.itemType==='sale'));
   const [availability, setAvailability] = useState(null);
   const [err, setErr] = useState('');
@@ -42,7 +43,7 @@ export default function EditOrder({ order, onClose, onSaved }) {
     e.preventDefault(); if (!itemsReady||(priceChanged&&approvedTotal!==total)) return; setErr('');
     try {
       await api('/orders/' + order._id, { method: 'PUT', body: { ...timing, confirmedTotal:total,
-        items: lines.filter(l => l.equipment).map(l => ({ ...l, quantity: +l.quantity })) } });
+        items: lines.filter(l => l.equipment).map(l => ({ equipment:l.equipment, quantity: +l.quantity })) } });
       onSaved();
     } catch (x) { setErr(x.message); }
   }
@@ -52,7 +53,7 @@ export default function EditOrder({ order, onClose, onSaved }) {
         <h2>Change {order.orderNo}</h2>
         <p className="hint">{order.customer?.name}</p>
         <label>Order contents<select value={salesOnly?'sale':'rental'} onChange={e=>{
-          setSalesOnly(e.target.value==='sale');setLines([{equipment:'',quantity:1}]);setAvailability(null);setApprovedTotal(null);
+          setSalesOnly(e.target.value==='sale');setLines([{key:crypto.randomUUID(),equipment:'',quantity:1}]);setAvailability(null);setApprovedTotal(null);
         }}><option value="rental">Rental equipment, with optional sale items</option><option value="sale">Sale items only</option></select></label>
         {dateOnly ? <div className="row">
           <label>Pickup date<input required type="date" value={start} onChange={e => setStart(e.target.value)} /></label>
@@ -64,14 +65,19 @@ export default function EditOrder({ order, onClose, onSaved }) {
         {salesOnly?<p>Sale items are charged once per item.</p>:dateOnly ? <p>Equipment is due back 36 hours after pickup is confirmed.</p> : periods > 0 && <p>{periods} rental period{periods > 1 ? 's' : ''} (36 hours each). Sale items are charged once.</p>}
         <div className="lines">
           {lines.map((l, i) => (
-            <div className="line" key={i}>
-              <select required value={l.equipment} onChange={e => setLine(i, 'equipment', e.target.value)}>
-                <option value="">Choose item</option>
-                {avail.map(a => <option key={a._id} value={a._id} disabled={a.available < 1 || lines.some((line,index)=>index!==i&&line.equipment===a._id)}>{a.name} · {typeFor(a)==='sale'?'Sale':'Rental'} ({a.available} available) · {lkr(rateFor(a))}{typeFor(a)==='sale'?' each':' / 36h'}</option>)}</select>
+            <div className="line" key={l.key}>
+              <EquipmentPicker label={`Item ${i + 1}`} required disabled={!preview} value={l.equipment}
+                placeholder={preview ? 'Search items by name or SKU' : 'Choose dates first'}
+                items={[
+                  ...(l.equipment && !avail.some(a=>a._id===l.equipment) ? [{value:l.equipment,label:'Unavailable for these dates',disabled:true}] : []),
+                  ...avail.map(a => ({value:a._id,searchText:`${a.name} ${a.sku || ''}`,
+                    label:`${a.name} · ${typeFor(a)==='sale'?'Sale':'Rental'} (${a.available} available) · ${lkr(rateFor(a))}${typeFor(a)==='sale'?' each':' / 36h'}`,
+                    disabled:a.available < 1 || lines.some((line,index)=>index!==i&&line.equipment===a._id)}))
+                ]} onChange={equipment=>setLine(i, 'equipment', equipment)}/>
               <input required type="number" min="1" step="1" max={avail.find(a=>a._id===l.equipment)?.available||undefined} value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
               <button type="button" onClick={() => setLines(lines.filter((_, j) => j !== i))}>Remove</button>
             </div>))}
-          <button type="button" onClick={() => setLines([...lines, { equipment: '', quantity: 1 }])}>Add item</button>
+          <button type="button" onClick={() => setLines([...lines, { key:crypto.randomUUID(), equipment: '', quantity: 1 }])}>Add item</button>
           {preview&&<p><b>Booking total {lkr(total)}</b>{priceChanged&&<small> · Previously {lkr(order.totalAmount)}</small>}</p>}
           {preview&&priceChanged&&<label className="check"><input type="checkbox" required checked={approvedTotal===total} onChange={e=>setApprovedTotal(e.target.checked?total:null)}/>Confirm the updated booking total</label>}
         </div>

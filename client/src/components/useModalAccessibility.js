@@ -30,6 +30,7 @@ export default function useModalAccessibility(){
   const keydown=e=>{
    if(!active)return;
    if(e.key==='Escape'){
+    if(e.target.closest('[role="combobox"][aria-expanded="true"]'))return;
     const close=controls().find(el=>el.tagName==='BUTTON'&&/^(cancel|close)$/i.test(el.textContent.trim()));
     if(close){e.preventDefault();e.stopPropagation();close.click();}
    }
